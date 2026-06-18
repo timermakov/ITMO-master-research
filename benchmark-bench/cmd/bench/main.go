@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/itmo-vkr/dwss/benchmark-bench/internal/experiment"
@@ -14,6 +15,7 @@ import (
 )
 
 func main() {
+	runtime.GOMAXPROCS(1)
 	if len(os.Args) < 2 {
 		log.Fatal("usage: bench run <scenario> | bench report --in <dir>")
 	}
@@ -54,6 +56,9 @@ func runCmd(args []string) {
 		log.Fatal(err)
 	}
 	m.EnrichFromFlags(*target, *active, *ready)
+	if err := m.ValidateWarmupReadyAfter(); err != nil {
+		log.Fatal(err)
+	}
 
 	ctx := context.Background()
 	var results []experiment.Result
@@ -110,6 +115,11 @@ func runCmd(args []string) {
 	}
 	if err := report.WriteMarkdown(*out, m, results, hypo); err != nil {
 		log.Fatal(err)
+	}
+	for _, r := range results {
+		if !r.CVPass {
+			log.Fatalf("CV check failed for %s: %s", r.Scenario, r.CVPassReason)
+		}
 	}
 	fmt.Println("wrote results to", *out)
 }

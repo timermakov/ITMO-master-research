@@ -1,6 +1,9 @@
 package profile
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -13,6 +16,8 @@ import (
 
 const ProtocolVersion = "2"
 
+const minRuns = 5
+
 // RunMeta captures reproducibility metadata written into every manifest.
 type RunMeta struct {
 	ProtocolVersion string    `json:"protocolVersion"`
@@ -24,22 +29,24 @@ type RunMeta struct {
 // Manifest holds experiment environment metadata.
 type Manifest struct {
 	RunMeta
-	Seed        int64                   `json:"seed"`
-	Samples     int                     `json:"samples"`
-	Runs        int                     `json:"runs"`
-	Profile     warmkit.WorkloadProfile `json:"profile"`
-	ProxyURL    string                  `json:"proxyUrl"`
-	WarmupURL   string                  `json:"warmupUrl"`
-	CoordURL    string                  `json:"coordUrl"`
-	ActiveURL   string                  `json:"activeUrl"`
-	RPS         int                     `json:"rps"`
-	LoadSec     int                     `json:"loadDurationSec"`
-	CVThreshold float64                 `json:"cvThreshold"`
-	CooldownMs  int                     `json:"cooldownMs"`
-	TargetInst  string                  `json:"targetInstanceId"`
-	ActiveInst  string                  `json:"activeInstanceId"`
-	ReadyAfter  int                     `json:"readyAfter"`
-	H4LoadSec   int                     `json:"h4LoadDurationSec"`
+	Seed            int64                   `json:"seed"`
+	Samples         int                     `json:"samples"`
+	Runs            int                     `json:"runs"`
+	MaxRuns         int                     `json:"maxRuns"`
+	ProfileOnHighCV bool                    `json:"profileOnHighCv"`
+	Profile         warmkit.WorkloadProfile `json:"profile"`
+	ProxyURL        string                  `json:"proxyUrl"`
+	WarmupURL       string                  `json:"warmupUrl"`
+	CoordURL        string                  `json:"coordUrl"`
+	ActiveURL       string                  `json:"activeUrl"`
+	RPS             int                     `json:"rps"`
+	LoadSec         int                     `json:"loadDurationSec"`
+	CVThreshold     float64                 `json:"cvThreshold"`
+	CooldownMs      int                     `json:"cooldownMs"`
+	TargetInst      string                  `json:"targetInstanceId"`
+	ActiveInst      string                  `json:"activeInstanceId"`
+	ReadyAfter      int                     `json:"readyAfter"`
+	H4LoadSec       int                     `json:"h4LoadDurationSec"`
 }
 
 // LoadFromEnv builds manifest using required env vars.
@@ -56,6 +63,20 @@ func LoadFromEnv() (Manifest, error) {
 	if m.Runs, err = envcfg.RequiredInt("DWSS_BENCH_RUNS"); err != nil {
 		return m, err
 	}
+	if m.Runs < minRuns {
+		return m, fmt.Errorf("DWSS_BENCH_RUNS=%d: minimum %d required for valid statistics", m.Runs, minRuns)
+	}
+	if m.MaxRuns, err = envcfg.OptionalInt("DWSS_BENCH_MAX_RUNS", m.Runs); err != nil {
+		return m, err
+	}
+	if m.MaxRuns < m.Runs {
+		return m, fmt.Errorf("DWSS_BENCH_MAX_RUNS=%d must be >= DWSS_BENCH_RUNS=%d", m.MaxRuns, m.Runs)
+	}
+	profileHighCV, err := envcfg.OptionalBool("DWSS_BENCH_PROFILE_ON_HIGH_CV", false)
+	if err != nil {
+		return m, err
+	}
+	m.ProfileOnHighCV = profileHighCV
 	if m.ProxyURL, err = envcfg.Required("DWSS_BENCH_PROXY_URL"); err != nil {
 		return m, err
 	}
@@ -101,6 +122,31 @@ func LoadFromEnv() (Manifest, error) {
 	return m, nil
 }
 
+// ValidateWarmupReadyAfter checks bench READY_AFTER matches warmup service config.
+func (m Manifest) ValidateWarmupReadyAfter() error {
+	resp, err := http.Get(m.WarmupURL + "/state")
+	if err != nil {
+		return fmt.Errorf("warmup state check: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("warmup state status %d", resp.StatusCode)
+	}
+	var snap struct {
+		Warmkit warmkit.MetricsSnapshot `json:"warmkit"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return err
+	}
+	if snap.Warmkit.ReadyAfter != m.ReadyAfter {
+		return fmt.Errorf(
+			"DWSS_BENCH_READY_AFTER=%d but warmup readyAfter=%d (sync with DWSS_WARMUP_READY_AFTER)",
+			m.ReadyAfter, snap.Warmkit.ReadyAfter,
+		)
+	}
+	return nil
+}
+
 func collectRunMeta() RunMeta {
 	commit := "unknown"
 	if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
@@ -133,4 +179,12 @@ func (m *Manifest) EnrichFromFlags(target, active string, ready int) {
 	if ready > 0 {
 		m.ReadyAfter = ready
 	}
+}
+
+// MaxAttempts returns the upper bound on run attempts for a scenario.
+func (m Manifest) MaxAttempts() int {
+	if m.ProfileOnHighCV {
+		return m.MaxRuns * 2
+	}
+	return m.Runs * 2
 }

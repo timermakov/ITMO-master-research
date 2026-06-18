@@ -56,6 +56,32 @@ func RequiredBool(key string) (bool, error) {
 	return b, nil
 }
 
+// OptionalInt parses an int env var or returns defaultValue when unset/empty.
+func OptionalInt(key string, defaultValue int) (int, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return defaultValue, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("environment variable %q: %w", key, err)
+	}
+	return n, nil
+}
+
+// OptionalBool parses a bool env var or returns defaultValue when unset/empty.
+func OptionalBool(key string, defaultValue bool) (bool, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return defaultValue, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("environment variable %q: %w", key, err)
+	}
+	return b, nil
+}
+
 // RequiredDurationFromSeconds parses seconds from env into time.Duration.
 func RequiredDurationFromSeconds(key string) (time.Duration, error) {
 	sec, err := RequiredInt(key)

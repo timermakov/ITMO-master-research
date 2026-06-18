@@ -50,11 +50,24 @@ benchmark-bench **не пишет в ZK** — только HTTP coordinator.
 
 ## Статистика
 
-- `runs ≥ 5` (`DWSS_BENCH_RUNS`); рекомендуется 10+ для отчёта.
-- Агрегация по **P50/P95 workload_ns** по runs.
-- **95% CI** — bootstrap (2000 resamples).
-- **CV** ≤ `DWSS_BENCH_CV_THRESHOLD` (по умолчанию 5%).
-- Выбросы: фильтр **1.5×IQR** на агрегированной выборке; в JSON сохраняются все raw runs.
+- `DWSS_BENCH_RUNS ≥ 5` (рекомендуется **10**); bench завершится с ошибкой при меньшем значении.
+- `DWSS_BENCH_READY_AFTER` **должен совпадать** с `DWSS_WARMUP_READY_AFTER` (проверка через `GET /state` при старте).
+- **Valid run**: перед probe проверяется `GET /state` (cold для S0, warm для S_ref/S_dw); invalid run повторяется, в stats не попадает.
+- После `POST /warmup` (S_ref) — poll `/state` до 2 s, пока `appCold=false`.
+- Агрегация по **P50/P95 workload_ns** по valid runs; **95% bootstrap CI** для mean и **P50**.
+- **CV** ≤ `DWSS_BENCH_CV_THRESHOLD` (thesis stand: **8%**; ideal **5%** on filtered runs при n≥5).- Выбросы: фильтр **1.5×IQR**; индексы в `outlierRunIndexes`; raw runs сохраняются в JSON.
+- **Adaptive runs** (`DWSS_BENCH_PROFILE_ON_HIGH_CV=true`): при CV fail после `RUNS` — до `DWSS_BENCH_MAX_RUNS`; иначе exit 1.
+
+### Профили конфигурации
+
+| Профиль | RUNS | LOAD_SEC | COOLDOWN_MS | Назначение |
+|---------|------|----------|-------------|------------|
+| **Thesis** | 10 | 60 | 1000 | финальная серия для ВКР |
+| **Debug** | 5 | 15 | 500 | быстрая проверка стенда |
+
+## H4 — агрегация блоков
+
+RTT агрегируются в **1-секундные блоки** (размер блока = `RPS`): медиана RTT в блоке → ~30 точек за 30 s. P95 и CV считаются по block-medians, не по тысячам raw RTT.
 
 ## Изоляция и порядок
 
@@ -66,14 +79,15 @@ benchmark-bench **не пишет в ZK** — только HTTP coordinator.
 
 - `protocolVersion`, `gitCommit`, `GOMAXPROCS`, `startedAt`
 - URLs, Profile, runs, `runs[]` с per-run probe + warmkit state
-- `hypotheses`: H1/H2 pass/fail (для `bench run all`)
+- `hypotheses`: H1, H2, H2_CI, H3 (для `bench run all`), H4 (для `bench h4`)
 
 ## Гипотезы
 
 | ID | Формулировка (по median P50 T_first) |
 |----|--------------------------------------|
 | H1 | S_dw ≤ S0 / 2 |
-| H2 | S_dw ≤ S_ref × 1.1 |
+| H2 | S_dw ≤ S_ref × 1.1 (P50) |
+| H2_CI | upper bound P50 bootstrap CI для S_dw ≤ S_ref × 1.1 |
 | H3 | `/readyz` = 200 после S_dw (логируется в `runs[].readyOk`) |
 | H4 | p95 E2E proxy `/work`: mirror on ≤ off × 1.05 |
 

@@ -27,7 +27,7 @@
 |----|------------|
 | NFR-1 | Конфигурация только через `.env.local`; в коде — имена переменных, без numeric fallback |
 | NFR-2 | Async mirror не блокирует ответ клиенту на active (H4: overhead ≤ 5%) |
-| NFR-3 | Воспроизводимость: фиксированный WorkloadProfile, manifest.json, CV ≤ 5% для ключевых прогонов |
+| NFR-3 | Воспроизводимость: фиксированный WorkloadProfile, manifest.json, CV ≤ 5% на filtered runs (n≥5); READY_AFTER bench = warmup |
 
 ## WorkloadProfile
 

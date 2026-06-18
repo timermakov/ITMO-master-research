@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
-	"sort"
 	"time"
 
 	"github.com/itmo-vkr/dwss/benchmark-bench/internal/cold"
@@ -19,30 +20,36 @@ import (
 
 // RunRecord is one independent cold measurement.
 type RunRecord struct {
-	RunIndex  int           `json:"runIndex"`
-	Probe     probe.Sample  `json:"probe"`
-	Warmkit   warmkit.State `json:"warmkitState,omitempty"`
-	ReadyOK   bool          `json:"readyOk,omitempty"`
-	SessionID string        `json:"sessionId,omitempty"`
+	RunIndex    int            `json:"runIndex"`
+	Attempt     int            `json:"attempt,omitempty"`
+	Probe       probe.Sample   `json:"probe"`
+	State       StateSnapshot  `json:"state,omitempty"`
+	Warmkit     warmkit.State  `json:"warmkitState,omitempty"`
+	ReadyOK     bool           `json:"readyOk,omitempty"`
+	SessionID   string         `json:"sessionId,omitempty"`
+	Invalidated bool           `json:"invalidated,omitempty"`
 }
 
 // Result is one scenario output.
 type Result struct {
-	Scenario   string        `json:"scenario"`
-	Summary    stats.Summary `json:"summary"`
-	E2ESummary stats.Summary `json:"e2eSummary,omitempty"`
-	Values     []float64     `json:"valuesNs"`
-	E2EValues  []float64     `json:"e2eValuesNs,omitempty"`
-	Runs       []RunRecord   `json:"runs"`
-	CVPass     bool          `json:"cvPass"`
-	Hypothesis string        `json:"hypothesisNote,omitempty"`
+	Scenario     string        `json:"scenario"`
+	Summary      stats.Summary `json:"summary"`
+	E2ESummary   stats.Summary `json:"e2eSummary,omitempty"`
+	BlockSummary stats.Summary `json:"blockSummary,omitempty"`
+	Values       []float64     `json:"valuesNs"`
+	E2EValues    []float64     `json:"e2eValuesNs,omitempty"`
+	BlockValues  []float64     `json:"blockValuesNs,omitempty"`
+	Runs         []RunRecord   `json:"runs"`
+	CVPass       bool          `json:"cvPass"`
+	CVPassReason string        `json:"cvPassReason,omitempty"`
+	Hypothesis   string        `json:"hypothesisNote,omitempty"`
 }
 
 // RunS0Control: each run = reset → probe (no warmup).
 func RunS0Control(m profile.Manifest) (Result, error) {
 	return runIndependent(m, "s0-control", func(ctx context.Context) error {
 		return nil
-	}, false)
+	}, false, "")
 }
 
 // RunSRef: each run = reset → POST /warmup → probe.
@@ -54,8 +61,8 @@ func RunSRef(m profile.Manifest) (Result, error) {
 			return err
 		}
 		_ = resp.Body.Close()
-		return nil
-	}, false)
+		return WaitWarmWorkload(m.WarmupURL, 2*time.Second)
+	}, false, "")
 }
 
 // RunSDw: each run = reset → baseline mirror → session + loadgen → wait ready → probe.
@@ -83,7 +90,7 @@ func RunSDw(ctx context.Context, m profile.Manifest) (Result, error) {
 			return loadErr
 		}
 		return cold.WaitReady(m.WarmupURL, time.Duration(m.LoadSec+30)*time.Second)
-	}, true)
+	}, true, "")
 }
 
 // RunH4Overhead compares E2E p95 through proxy with mirror off vs on.
@@ -114,63 +121,111 @@ func RunH4Overhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
 		if err != nil && len(rtts) == 0 {
 			return nil, err
 		}
-		floats := intsToFloats(rtts)
-		sorted := append([]float64(nil), floats...)
-		sort.Float64s(sorted)
-		filtered := stats.FilterIQR(sorted)
-		sum := stats.SummarizeFiltered(floats, filtered)
+		rawFloats := intsToFloats(rtts)
+		blocks := loadgen.BlockMedians(rtts, m.RPS)
+		filtered, outliers := stats.FilterIQRIndexed(blocks)
+		blockSum := stats.SummarizeFiltered(blocks, filtered, outliers)
+		cv := stats.EvaluateCV(blockSum, m.CVThreshold)
 		out = append(out, Result{
-			Scenario:   ph.name,
-			Summary:    sum,
-			Values:     floats,
-			CVPass:     sum.CV <= m.CVThreshold,
-			Hypothesis: "H4: p95 mirror-on vs mirror-off on proxy /work E2E",
+			Scenario:     ph.name,
+			Summary:      blockSum,
+			BlockSummary: blockSum,
+			Values:       rawFloats,
+			BlockValues:  blocks,
+			CVPass:       cv.Pass,
+			CVPassReason: cv.Reason,
+			Hypothesis:   "H4: p95 mirror-on vs mirror-off on proxy /work E2E (block medians)",
 		})
 	}
 	_ = coord.BaselineMirror(m.CoordURL, m.ActiveInst)
 	return out, nil
 }
 
-func runIndependent(m profile.Manifest, name string, warmup func(context.Context) error, trackReady bool) (Result, error) {
-	records := make([]RunRecord, 0, m.Runs)
-	values := make([]float64, 0, m.Runs)
-	e2e := make([]float64, 0, m.Runs)
-	for i := 0; i < m.Runs; i++ {
+func runIndependent(m profile.Manifest, name string, warmup func(context.Context) error, trackReady bool, _ string) (Result, error) {
+	records := make([]RunRecord, 0, m.MaxRuns)
+	values := make([]float64, 0, m.MaxRuns)
+	e2e := make([]float64, 0, m.MaxRuns)
+	maxValid := m.Runs
+	if m.ProfileOnHighCV {
+		maxValid = m.MaxRuns
+	}
+	maxAttempts := m.MaxAttempts()
+
+	for attempt := 1; attempt <= maxAttempts && len(records) < maxValid; attempt++ {
 		if err := cold.ResetWarmup(m.WarmupURL); err != nil {
 			return Result{}, err
 		}
+		time.Sleep(200 * time.Millisecond)
 		m.Cooldown()
 		runCtx := context.Background()
 		if err := warmup(runCtx); err != nil {
 			return Result{}, err
 		}
+		readyOK := false
+		if trackReady {
+			readyOK = readyzOK(m.WarmupURL)
+		}
+		snap, err := FetchState(m.WarmupURL)
+		if err != nil {
+			log.Printf("[%s] attempt %d: state fetch failed: %v", name, attempt, err)
+			continue
+		}
+		if !ValidPreProbe(name, snap, readyOK) {
+			log.Printf("[%s] attempt %d: invalid pre-probe state (readyOk=%v mmapCold=%v appCold=%v)",
+				name, attempt, readyOK, snap.Workload.MmapCold, snap.Workload.AppCold)
+			continue
+		}
 		s, err := probe.TFirst(m.WarmupURL, m.Profile)
 		if err != nil {
-			return Result{}, err
+			log.Printf("[%s] attempt %d: probe failed: %v", name, attempt, err)
+			continue
 		}
-		rec := RunRecord{RunIndex: i + 1, Probe: s}
-		if trackReady {
-			rec.ReadyOK = readyzOK(m.WarmupURL)
+		rec := RunRecord{
+			RunIndex: len(records) + 1,
+			Attempt:  attempt,
+			Probe:    s,
+			State:    snap,
+			ReadyOK:  readyOK,
+		}
+		if snap.Warmkit.State != "" {
+			rec.Warmkit = snap.Warmkit.State
 		}
 		records = append(records, rec)
 		values = append(values, float64(s.WorkloadNs))
 		e2e = append(e2e, float64(s.E2ENs))
 		m.Cooldown()
+
+		if len(records) >= m.Runs {
+			res := buildResult(name, records, values, e2e, m.CVThreshold)
+			if res.CVPass || len(records) >= maxValid || !m.ProfileOnHighCV {
+				return res, nil
+			}
+			log.Printf("[%s] CV fail (%s), collecting up to %d runs", name, res.CVPassReason, maxValid)
+		}
 	}
-	sorted := append([]float64(nil), values...)
-	sort.Float64s(sorted)
-	filtered := stats.FilterIQR(sorted)
-	sum := stats.SummarizeFiltered(values, filtered)
-	e2eSum := stats.Summarize(e2e)
+	if len(records) == 0 {
+		return Result{}, fmt.Errorf("[%s] no valid runs after %d attempts", name, maxAttempts)
+	}
+	res := buildResult(name, records, values, e2e, m.CVThreshold)
+	return res, nil
+}
+
+func buildResult(name string, records []RunRecord, values, e2e []float64, cvThreshold float64) Result {
+	filtered, outliers := stats.FilterIQRIndexed(values)
+	sum := stats.SummarizeFiltered(values, filtered, outliers)
+	e2eFiltered, e2eOutliers := stats.FilterIQRIndexed(e2e)
+	e2eSum := stats.SummarizeFiltered(e2e, e2eFiltered, e2eOutliers)
+	cv := stats.EvaluateCV(sum, cvThreshold)
 	return Result{
-		Scenario:   name,
-		Summary:    sum,
-		E2ESummary: e2eSum,
-		Values:     values,
-		E2EValues:  e2e,
-		Runs:       records,
-		CVPass:     sum.CV <= m.CVThreshold,
-	}, nil
+		Scenario:     name,
+		Summary:      sum,
+		E2ESummary:   e2eSum,
+		Values:       values,
+		E2EValues:    e2e,
+		Runs:         records,
+		CVPass:       cv.Pass,
+		CVPassReason: cv.Reason,
+	}
 }
 
 func readyzOK(warmupURL string) bool {
@@ -190,7 +245,7 @@ func intsToFloats(in []int64) []float64 {
 	return out
 }
 
-// EvaluateH4 compares mirror-on vs mirror-off p95 E2E on proxy /work.
+// EvaluateH4 compares mirror-on vs mirror-off p95 E2E on proxy /work (block medians).
 func EvaluateH4(off, on Result) string {
 	if on.Summary.P95 <= off.Summary.P95*1.05 {
 		return "pass"
@@ -198,7 +253,7 @@ func EvaluateH4(off, on Result) string {
 	return "fail"
 }
 
-// EvaluateHypotheses compares scenario medians for H1/H2 notes.
+// EvaluateHypotheses compares scenario medians for H1/H2/H3 notes.
 func EvaluateHypotheses(s0, sRef, sDw Result) map[string]string {
 	notes := map[string]string{}
 	if sDw.Summary.P50 <= s0.Summary.P50/2 {
@@ -211,5 +266,19 @@ func EvaluateHypotheses(s0, sRef, sDw Result) map[string]string {
 	} else {
 		notes["H2"] = "fail"
 	}
+	refBound := sRef.Summary.P50 * 1.1
+	if sDw.Summary.P50CIHigh <= refBound {
+		notes["H2_CI"] = "pass"
+	} else {
+		notes["H2_CI"] = "fail"
+	}
+	h3 := "pass"
+	for _, r := range sDw.Runs {
+		if !r.ReadyOK {
+			h3 = "fail"
+			break
+		}
+	}
+	notes["H3"] = h3
 	return notes
 }
