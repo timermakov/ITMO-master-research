@@ -98,6 +98,14 @@ func (s *Store) Map() error {
 	return nil
 }
 
+// Remap unmaps and maps the backing file again (cold page faults on next read).
+func (s *Store) Remap() error {
+	if err := s.Unmap(); err != nil {
+		return err
+	}
+	return s.Map()
+}
+
 // Unmap releases resources.
 func (s *Store) Unmap() error {
 	s.mu.Lock()

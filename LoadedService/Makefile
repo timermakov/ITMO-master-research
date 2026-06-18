@@ -1,13 +1,18 @@
-APP:=coldstart
-PKG:=github.com/itmo-vkr/loadedservice
+APP:=loadedservice
+PKG:=github.com/itmo-vkr/dwss/LoadedService
+
+ifneq (,$(wildcard ../.env.local))
+include ../.env.local
+export
+endif
 
 .PHONY: run build tidy fmt vet test
 
 run:
-	go run ./cmd/coldstart -addr=:8080 -file=data/big.bin -size=500 -samples=1000
+	go run ./cmd/server
 
 build:
-	go build -o bin/$(APP) ./cmd/coldstart
+	go build -o bin/$(APP) ./cmd/server
 
 tidy:
 	go mod tidy
@@ -20,5 +25,3 @@ vet:
 
 test:
 	go test ./...
-
-

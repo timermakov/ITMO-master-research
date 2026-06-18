@@ -1,0 +1,16 @@
+bin/
+data/
+results/
+*.exe
+*.log
+.env
+.env.local
+.env.*.local
+
+.vscode/
+.cursor/
+.idea/
+tmp/
+
+LoadedService/bin/
+LoadedService/data/

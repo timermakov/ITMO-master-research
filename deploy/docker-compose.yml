@@ -1,0 +1,78 @@
+services:
+  zookeeper:
+    image: zookeeper:3.9
+    ports:
+      - "${DWSS_ZK_CLIENT_PORT}:${DWSS_ZK_CLIENT_PORT}"
+    environment:
+      ZOO_CLIENT_PORT: ${DWSS_ZK_CLIENT_PORT}
+    healthcheck:
+      test: ["CMD", "zkServer.sh", "status"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  loaded-service-active:
+    build:
+      context: ..
+      dockerfile: LoadedService/Dockerfile
+    env_file:
+      - ../.env.local
+    environment:
+      DWSS_ROLE: active
+      DWSS_INSTANCE_ID: active-1
+      DWSS_HTTP_ADDR: ${DWSS_ACTIVE_HTTP_ADDR}
+    ports:
+      - "${DWSS_ACTIVE_HOST_PORT}:8080"
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+
+  loaded-service-warmup:
+    build:
+      context: ..
+      dockerfile: LoadedService/Dockerfile
+    env_file:
+      - ../.env.local
+    environment:
+      DWSS_ROLE: warmup
+      DWSS_INSTANCE_ID: warmup-1
+      DWSS_HTTP_ADDR: ${DWSS_WARMUP_HTTP_ADDR}
+    ports:
+      - "${DWSS_WARMUP_HOST_PORT}:8081"
+      - "${DWSS_PPROF_HOST_PORT}:6060"
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+
+  mirror-proxy:
+    build:
+      context: ..
+      dockerfile: cmd/mirror-proxy/Dockerfile
+    env_file:
+      - ../.env.local
+    ports:
+      - "${DWSS_PROXY_HOST_PORT}:${DWSS_PROXY_CONTAINER_PORT}"
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      loaded-service-active:
+        condition: service_started
+      loaded-service-warmup:
+        condition: service_started
+
+  warmup-coordinator:
+    build:
+      context: ..
+      dockerfile: cmd/warmup-coordinator/Dockerfile
+    env_file:
+      - ../.env.local
+    ports:
+      - "${DWSS_COORD_HOST_PORT}:${DWSS_COORD_CONTAINER_PORT}"
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
