@@ -24,6 +24,7 @@ const (
 	envServiceName  = "DWSS_COORD_SERVICE_NAME"
 	envRampInterval = "DWSS_COORD_RAMP_INTERVAL_SEC"
 	envRampSteps    = "DWSS_COORD_RAMP_STEPS"
+	envHoldMaxSec   = "DWSS_COORD_HOLD_MAX_SEC"
 	envShutdownSec  = "DWSS_COORD_SHUTDOWN_SEC"
 )
 
@@ -40,6 +41,7 @@ type coordinator struct {
 	service  string
 	interval time.Duration
 	steps    []float64
+	holdMax  time.Duration
 	mu       sync.Mutex
 	sessions map[string]*session
 }
@@ -76,6 +78,11 @@ func main() {
 		logger.Error("config", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
+	holdMaxSec, err := envcfg.OptionalInt(envHoldMaxSec, 120)
+	if err != nil {
+		logger.Error("config", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
 
 	steps, err := parseSteps(stepsRaw)
 	if err != nil {
@@ -96,6 +103,7 @@ func main() {
 		service:  service,
 		interval: time.Duration(intervalSec) * time.Second,
 		steps:    steps,
+		holdMax:  time.Duration(holdMaxSec) * time.Second,
 		sessions: make(map[string]*session),
 	}
 
@@ -171,6 +179,7 @@ func (c *coordinator) runRamp(ctx context.Context, sessionID, target, active str
 		SessionID:        sessionID,
 	}
 	_ = warmkit.WriteMirrorConfig(c.conn, c.service, cfg)
+	holdDeadline := time.Now().Add(c.holdMax)
 
 	for _, ratio := range c.steps {
 		select {
@@ -183,9 +192,22 @@ func (c *coordinator) runRamp(ctx context.Context, sessionID, target, active str
 		c.log.Info("ramp", slog.Float64("ratio", ratio), slog.String("session", sessionID))
 		time.Sleep(c.interval)
 
-		if c.instanceReady(target, readyAfter) {
+		if c.instanceReady(target) {
 			break
 		}
+	}
+
+	cfg.Ratio = 1.0
+	cfg.Enabled = true
+	for !c.instanceReady(target) && time.Now().Before(holdDeadline) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		_ = warmkit.WriteMirrorConfig(c.conn, c.service, cfg)
+		c.log.Info("hold mirror", slog.String("session", sessionID))
+		time.Sleep(c.interval)
 	}
 
 	cfg.Ratio = 0
@@ -199,7 +221,7 @@ func (c *coordinator) runRamp(ctx context.Context, sessionID, target, active str
 	c.mu.Unlock()
 }
 
-func (c *coordinator) instanceReady(instanceID string, readyAfter int) bool {
+func (c *coordinator) instanceReady(instanceID string) bool {
 	path := "/services/" + c.service + "/instances/" + instanceID
 	b, _, err := c.conn.Get(path)
 	if err != nil {

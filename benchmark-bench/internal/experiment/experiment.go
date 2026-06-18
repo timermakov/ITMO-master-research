@@ -75,13 +75,15 @@ func RunSDw(ctx context.Context, m profile.Manifest) (Result, error) {
 		if err != nil {
 			return err
 		}
-		loadCtx, cancel := context.WithTimeout(runCtx, time.Duration(m.LoadSec)*time.Second)
+		lp := m.LoadProfile()
+		totalSec := m.TotalLoadSec()
+		loadCtx, cancel := context.WithTimeout(runCtx, time.Duration(totalSec+30)*time.Second)
 		defer cancel()
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- loadgen.Run(loadCtx, m.ProxyURL, m.Profile, m.RPS, m.LoadSec)
+			errCh <- loadgen.RunPhased(loadCtx, m.ProxyURL, m.Profile, lp)
 		}()
-		waitErr := coord.WaitSessionCompleted(m.CoordURL, sid, m.LoadSec+30)
+		waitErr := coord.WaitSessionCompleted(m.CoordURL, sid, totalSec+60)
 		loadErr := <-errCh
 		if waitErr != nil {
 			return waitErr
@@ -89,7 +91,11 @@ func RunSDw(ctx context.Context, m profile.Manifest) (Result, error) {
 		if loadErr != nil && loadErr != context.Canceled && loadErr != context.DeadlineExceeded {
 			return loadErr
 		}
-		return cold.WaitReady(m.WarmupURL, time.Duration(m.LoadSec+30)*time.Second)
+		if err := cold.WaitReady(m.WarmupURL, 120*time.Second); err != nil {
+			return err
+		}
+		time.Sleep(500 * time.Millisecond)
+		return nil
 	}, true, "")
 }
 
@@ -115,14 +121,16 @@ func RunH4Overhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
 			return nil, err
 		}
 		m.Cooldown()
-		loadCtx, cancel := context.WithTimeout(ctx, time.Duration(m.H4LoadSec)*time.Second)
-		rtts, err := loadgen.CollectRTT(loadCtx, m.ProxyURL, m.Profile, m.RPS, m.H4LoadSec)
+		lp := m.H4LoadProfile()
+		totalSec := m.TotalH4LoadSec()
+		loadCtx, cancel := context.WithTimeout(ctx, time.Duration(totalSec+30)*time.Second)
+		rttRes, err := loadgen.CollectRTTPhased(loadCtx, m.ProxyURL, m.Profile, lp)
 		cancel()
-		if err != nil && len(rtts) == 0 {
+		if err != nil && len(rttRes.Steady) == 0 {
 			return nil, err
 		}
-		rawFloats := intsToFloats(rtts)
-		blocks := loadgen.BlockMedians(rtts, m.RPS)
+		rawFloats := intsToFloats(rttRes.All)
+		blocks := loadgen.BlockMedians(rttRes.Steady, m.RPS)
 		filtered, outliers := stats.FilterIQRIndexed(blocks)
 		blockSum := stats.SummarizeFiltered(blocks, filtered, outliers)
 		cv := stats.EvaluateCV(blockSum, m.CVThreshold)

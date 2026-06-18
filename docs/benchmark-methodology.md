@@ -32,19 +32,33 @@ POST /reset  →  [фаза прогрева по сценарию]  →  оди
 
 1. `PUT /v1/mirror/config` — mirror off, active = `active-1`.
 2. `POST /v1/warmup/sessions` — ramp через coordinator.
-3. Параллельно: loadgen шлёт `GET /work?seed=&samples=` **через proxy** (production-путь).
+3. Параллельно: loadgen шлёт `GET /work?seed=&samples=` **через proxy** по профилю **ramp-up → steady → ramp-down** (см. ниже).
 4. Ждём `session.status=completed` и `/readyz=200`.
 5. Один probe на warmup (не через proxy, без shadow header).
 
+Coordinator ramp **60 s** (`RAMP_INTERVAL=10` × 6 steps), aligned with loadgen ramp-up. После шагов — **hold** mirror at ratio=1.0 до `Ready`/`Active` (max `DWSS_COORD_HOLD_MAX_SEC`).
+
 benchmark-bench **не пишет в ZK** — только HTTP coordinator.
+
+По [рекомендациям по съёму метрик](https://habr.com/ru/articles/910760/): метрики **не** усредняются по всему прогону. Loadgen реализует три фазы:
+
+| Фаза | Переменная | Назначение |
+|------|------------|------------|
+| **Ramp-up** | `DWSS_BENCH_RAMP_UP_SEC` | Плавный рост RPS 0→max (прогрев кэша, соединений) |
+| **Steady** | `DWSS_BENCH_STEADY_SEC` | Постоянная нагрузка; **только здесь** считаются E2E/H4 метрики |
+| **Ramp-down** | `DWSS_BENCH_RAMP_DOWN_SEC` | Плавное снижение RPS; в статистику **не** входит |
+
+RPS в ramp-up/down растёт/падает **линейно**. Для S_dw steady нужен для прогрева shadow через proxy; **T_first** по-прежнему снимается одним probe после завершения всей фазы нагрузки.
+
+Thesis-профиль: ramp **60 s**, steady **≥300 s** (5 min — минимум для устойчивых метрик), down **30 s**. H4 использует тот же ramp/down, но `DWSS_BENCH_H4_STEADY_SEC` для steady-окна E2E.
 
 ## H4 (overhead mirror)
 
 Измеряется **E2E p95** `GET /work` **через proxy** (клиентский путь на active):
 
-1. `mirror off` → loadgen N сек → собрать RTT.
-2. `mirror on, ratio=1.0` → loadgen N сек → собрать RTT.
-3. Сравнить p95: H4 pass если p95(on) ≤ p95(off) × 1.05.
+1. `mirror off` → loadgen (ramp → steady → down) → RTT **только из steady**.
+2. `mirror on, ratio=1.0` → loadgen → RTT из steady.
+3. Сравнить p95 block-medians: H4 pass если p95(on) ≤ p95(off) × 1.05.
 
 После H4 — baseline mirror off.
 
@@ -55,19 +69,20 @@ benchmark-bench **не пишет в ZK** — только HTTP coordinator.
 - **Valid run**: перед probe проверяется `GET /state` (cold для S0, warm для S_ref/S_dw); invalid run повторяется, в stats не попадает.
 - После `POST /warmup` (S_ref) — poll `/state` до 2 s, пока `appCold=false`.
 - Агрегация по **P50/P95 workload_ns** по valid runs; **95% bootstrap CI** для mean и **P50**.
-- **CV** ≤ `DWSS_BENCH_CV_THRESHOLD` (thesis stand: **8%**; ideal **5%** on filtered runs при n≥5).- Выбросы: фильтр **1.5×IQR**; индексы в `outlierRunIndexes`; raw runs сохраняются в JSON.
+- **CV** ≤ `DWSS_BENCH_CV_THRESHOLD` (thesis ideal **5%**; lab stand Windows/Docker **15–20%**; см. `.env.local`)
+- Выбросы: фильтр **1.5×IQR**; индексы в `outlierRunIndexes`; raw runs сохраняются в JSON.
 - **Adaptive runs** (`DWSS_BENCH_PROFILE_ON_HIGH_CV=true`): при CV fail после `RUNS` — до `DWSS_BENCH_MAX_RUNS`; иначе exit 1.
 
 ### Профили конфигурации
 
-| Профиль | RUNS | LOAD_SEC | COOLDOWN_MS | Назначение |
-|---------|------|----------|-------------|------------|
-| **Thesis** | 10 | 60 | 1000 | финальная серия для ВКР |
-| **Debug** | 5 | 15 | 500 | быстрая проверка стенда |
+| Профиль | RUNS | RAMP / STEADY / DOWN | COOLDOWN_MS | Назначение |
+|---------|------|----------------------|-------------|------------|
+| **Thesis** | 10 | 60 / 300 / 30 | 1000 | финальная серия для ВКР |
+| **Debug** | 5 | 30 / 60 / 15 | 500 | быстрая проверка стенда |
 
 ## H4 — агрегация блоков
 
-RTT агрегируются в **1-секундные блоки** (размер блока = `RPS`): медиана RTT в блоке → ~30 точек за 30 s. P95 и CV считаются по block-medians, не по тысячам raw RTT.
+RTT агрегируются в **1-секундные блоки** (размер блока = `RPS`): медиана RTT в блоке. Блоки строятся **только из steady-фазы** (≈120 точек при H4 steady=120 s). P95 и CV считаются по block-medians.
 
 ## Изоляция и порядок
 

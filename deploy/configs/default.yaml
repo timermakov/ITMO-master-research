@@ -10,10 +10,12 @@ bench:
   active_url: DWSS_BENCH_ACTIVE_URL
   coord_url: DWSS_BENCH_COORD_URL
   rps: DWSS_BENCH_RPS
-  load_duration_sec: DWSS_BENCH_LOAD_DURATION_SEC
+  ramp_up_sec: DWSS_BENCH_RAMP_UP_SEC
+  steady_sec: DWSS_BENCH_STEADY_SEC
+  ramp_down_sec: DWSS_BENCH_RAMP_DOWN_SEC
+  h4_steady_sec: DWSS_BENCH_H4_STEADY_SEC
   cv_threshold: DWSS_BENCH_CV_THRESHOLD
   cooldown_ms: DWSS_BENCH_COOLDOWN_MS
   target_instance: DWSS_BENCH_TARGET_INSTANCE
   active_instance: DWSS_BENCH_ACTIVE_INSTANCE
   ready_after: DWSS_BENCH_READY_AFTER
-  h4_load_duration_sec: DWSS_BENCH_H4_LOAD_DURATION_SEC
