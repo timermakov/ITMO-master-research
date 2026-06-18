@@ -1,0 +1,8 @@
+bin/
+data/
+*.exe
+*.log
+.DS_Store
+dist/
+
+
