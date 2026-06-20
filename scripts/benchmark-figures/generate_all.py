@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Генерация всех рисунков для НИР из results/*.json → figures/."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+# Allow running as script from repo root or from this directory.
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import fig01_tfirst_p50 as f01
+import fig02_tfirst_runs as f02
+import fig03_hypotheses as f03
+import fig04_cv as f04
+import fig05_h4_p95 as f05
+import fig06_h4_blocks as f06
+import fig07_load_profile as f07
+from common.data import project_root
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Построить рисунки benchmark для НИР")
+    parser.add_argument(
+        "--full",
+        type=Path,
+        default=None,
+        help="Путь к results/full/results.json",
+    )
+    parser.add_argument(
+        "--h4",
+        type=Path,
+        default=None,
+        help="Путь к results/h4/results.json",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Каталог вывода (по умолчанию figures/)",
+    )
+    args = parser.parse_args()
+
+    out_dir = args.out or project_root() / "figures"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    full_path = args.full or project_root() / "results" / "full" / "results.json"
+    h4_path = args.h4 or project_root() / "results" / "h4" / "results.json"
+
+    if not full_path.is_file():
+        print(f"ERROR: не найден {full_path}", file=sys.stderr)
+        return 1
+
+    print(f"Источник: {full_path}")
+    f01.plot(out_dir, full_path)
+    f02.plot(out_dir, full_path)
+    f03.plot(out_dir, full_path)
+    f04.plot(out_dir, full_path)
+    f07.plot(out_dir, full_path)
+
+    if h4_path.is_file():
+        print(f"Источник H4: {h4_path}")
+        f05.plot(out_dir, h4_path)
+        f06.plot(out_dir, h4_path)
+    else:
+        print(f"WARN: H4 пропущен — нет {h4_path}", file=sys.stderr)
+
+    manifest = {
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "fullResults": str(full_path.resolve()),
+        "h4Results": str(h4_path.resolve()) if h4_path.is_file() else None,
+        "figures": [
+            "fig01_tfirst_p50",
+            "fig02_tfirst_runs",
+            "fig03_hypotheses_h1_h2",
+            "fig04_cv_scenarios",
+            "fig05_h4_p95",
+            "fig06_h4_blocks_timeseries",
+            "fig07_load_profile",
+        ],
+    }
+    (out_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    print(f"Готово: {out_dir}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -20,14 +20,14 @@ import (
 
 // RunRecord is one independent cold measurement.
 type RunRecord struct {
-	RunIndex    int            `json:"runIndex"`
-	Attempt     int            `json:"attempt,omitempty"`
-	Probe       probe.Sample   `json:"probe"`
-	State       StateSnapshot  `json:"state,omitempty"`
-	Warmkit     warmkit.State  `json:"warmkitState,omitempty"`
-	ReadyOK     bool           `json:"readyOk,omitempty"`
-	SessionID   string         `json:"sessionId,omitempty"`
-	Invalidated bool           `json:"invalidated,omitempty"`
+	RunIndex    int           `json:"runIndex"`
+	Attempt     int           `json:"attempt,omitempty"`
+	Probe       probe.Sample  `json:"probe"`
+	State       StateSnapshot `json:"state,omitempty"`
+	Warmkit     warmkit.State `json:"warmkitState,omitempty"`
+	ReadyOK     bool          `json:"readyOk,omitempty"`
+	SessionID   string        `json:"sessionId,omitempty"`
+	Invalidated bool          `json:"invalidated,omitempty"`
 }
 
 // Result is one scenario output.
