@@ -14,3 +14,8 @@ tmp/
 
 LoadedService/bin/
 LoadedService/data/
+
+**/__pycache__/
+*.pyc
+figures/
+.DS_Store

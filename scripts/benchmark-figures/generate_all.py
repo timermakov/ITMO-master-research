@@ -56,6 +56,13 @@ def main() -> int:
         print(f"ERROR: не найден {full_path}", file=sys.stderr)
         return 1
 
+    figures = [
+        "fig01_tfirst_p50",
+        "fig02_tfirst_runs",
+        "fig03_hypotheses_h1_h2",
+        "fig04_cv_scenarios",
+    ]
+
     print(f"Источник: {full_path}")
     f01.plot(out_dir, full_path)
     f02.plot(out_dir, full_path)
@@ -67,22 +74,16 @@ def main() -> int:
         print(f"Источник H4: {h4_path}")
         f05.plot(out_dir, h4_path)
         f06.plot(out_dir, h4_path)
+        figures.extend(["fig05_h4_p95", "fig06_h4_blocks_timeseries"])
     else:
         print(f"WARN: H4 пропущен — нет {h4_path}", file=sys.stderr)
+    figures.append("fig07_load_profile")
 
     manifest = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "fullResults": str(full_path.resolve()),
         "h4Results": str(h4_path.resolve()) if h4_path.is_file() else None,
-        "figures": [
-            "fig01_tfirst_p50",
-            "fig02_tfirst_runs",
-            "fig03_hypotheses_h1_h2",
-            "fig04_cv_scenarios",
-            "fig05_h4_p95",
-            "fig06_h4_blocks_timeseries",
-            "fig07_load_profile",
-        ],
+        "figures": figures,
     }
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
