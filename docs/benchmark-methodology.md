@@ -64,25 +64,35 @@ Thesis-профиль: ramp **60 s**, steady **≥300 s** (5 min — миним�
 
 ## Статистика
 
-- `DWSS_BENCH_RUNS ≥ 5` (рекомендуется **10**); bench завершится с ошибкой при меньшем значении.
+- `DWSS_BENCH_RUNS ≥ 5`; для финального отчёта НИР использовать **20–30** независимых run или явно обосновать меньшее N.
+- `DWSS_BENCH_MAX_RUNS` должен быть выше `RUNS` при `DWSS_BENCH_PROFILE_ON_HIGH_CV=true`, чтобы adaptive runs могли добрать устойчивую серию.
+- H4 выполняется отдельными повторами `DWSS_BENCH_H4_RUNS` / `DWSS_BENCH_H4_MAX_RUNS`: каждый повтор даёт run-level P95 по 1-секундным block-medians.
 - `DWSS_BENCH_READY_AFTER` **должен совпадать** с `DWSS_WARMUP_READY_AFTER` (проверка через `GET /state` при старте).
 - **Valid run**: перед probe проверяется `GET /state` (cold для S0, warm для S_ref/S_dw); invalid run повторяется, в stats не попадает.
 - После `POST /warmup` (S_ref) — poll `/state` до 2 s, пока `appCold=false`.
 - Агрегация по **P50/P95 workload_ns** по valid runs; **95% bootstrap CI** для mean и **P50**.
-- **CV** ≤ `DWSS_BENCH_CV_THRESHOLD` (thesis ideal **5%**; lab stand Windows/Docker **15–20%**; см. `.env.local`)
+- **CV** считается по filtered set. Глобальный порог задаёт `DWSS_BENCH_CV_THRESHOLD`, но для отчётной серии допустимы scenario-specific пороги:
+  - `DWSS_BENCH_CV_THRESHOLD_S0` — cold baseline может иметь более высокую естественную дисперсию.
+  - `DWSS_BENCH_CV_THRESHOLD_S_REF` и `DWSS_BENCH_CV_THRESHOLD_S_DW` — прогретые сценарии должны быть строже.
+- Цель для НИР: CV прогретых сценариев **≤ 5–10%**. Порог **15–20%** допустим только как lab/Windows/Docker ограничение и должен быть явно объяснён.
 - Выбросы: фильтр **1.5×IQR**; индексы в `outlierRunIndexes`; raw runs сохраняются в JSON.
 - **Adaptive runs** (`DWSS_BENCH_PROFILE_ON_HIGH_CV=true`): при CV fail после `RUNS` — до `DWSS_BENCH_MAX_RUNS`; иначе exit 1.
 
 ### Профили конфигурации
 
-| Профиль | RUNS | RAMP / STEADY / DOWN | COOLDOWN_MS | Назначение |
-|---------|------|----------------------|-------------|------------|
-| **Thesis** | 10 | 60 / 300 / 30 | 1000 | финальная серия для ВКР |
-| **Debug** | 5 | 30 / 60 / 15 | 500 | быстрая проверка стенда |
+| Профиль | RUNS | MAX_RUNS | H4_RUNS | RAMP / STEADY / DOWN | COOLDOWN_MS | Назначение |
+|---------|------|----------|---------|----------------------|-------------|------------|
+| **Final NIR** | 20–30 | 40–60 | 5–10 | 60 / 300 / 30 | 2000–5000 | серия для отчёта |
+| **Lab** | 10–20 | 20–40 | 3–5 | 60 / 300 / 30 | 1000–2000 | проверка на Windows/Docker |
+| **Debug** | 5 | 5–10 | 1 | 30 / 60 / 15 | 500 | быстрая проверка стенда |
+
+Перед финальной серией: отключить pprof, не запускать параллельные Docker builds/IDE-heavy процессы, прогреть сам стенд dry-run запуском, зафиксировать commit, `.env.local` (или hash значимых `DWSS_*`), Docker image IDs, OS/CPU/Go version.
 
 ## H4 — агрегация блоков
 
-RTT агрегируются в **1-секундные блоки** (размер блока = `RPS`): медиана RTT в блоке. Блоки строятся **только из steady-фазы** (≈120 точек при H4 steady=120 s). P95 и CV считаются по block-medians.
+RTT агрегируются в **1-секундные блоки** (размер блока = `RPS`): медиана RTT в блоке. Блоки строятся **только из steady-фазы** (≈120 точек при H4 steady=120 s).
+
+Для финального H4 каждый повтор `mirror off`/`mirror on` даёт run-level P95 по block-medians. Итоговый H4 сравнивает агрегат по повторам: mirror on должен быть ≤ mirror off × 1.05. Timeseries block-medians используется как диагностический график стабильности, а не как единственное доказательство H4.
 
 ## Изоляция и порядок
 
@@ -93,8 +103,30 @@ RTT агрегируются в **1-секундные блоки** (разме�
 ## Manifest (`results.json`)
 
 - `protocolVersion`, `gitCommit`, `GOMAXPROCS`, `startedAt`
+- `gitDirty`, `goVersion`, `os`, `arch`, `numCPU`, `dockerVersion`, `dockerImages`
 - URLs, Profile, runs, `runs[]` с per-run probe + warmkit state
+- CV thresholds, `h4Runs`, `h4MaxRuns`, `envProfileName`, actual `readyAfter`
 - `hypotheses`: H1, H2, H2_CI, H3 (для `bench run all`), H4 (для `bench h4`)
+
+## Критерии готовности к отчёту НИР
+
+- Все графики сгенерированы из одного `results/full/results.json` и одного `results/h4/results.json`; `figures/manifest.json` содержит sha256 этих файлов.
+- `RUNS ≥ 20` для финальной серии или в тексте отчёта объяснено, почему использовано меньшее N.
+- `nFiltered ≥ 0.8 × N` для каждого сценария; иначе серия считается слишком шумной или требует отдельного разбора.
+- Для прогретых сценариев CV желательно ≤ 10%; превышение 5% должно быть отмечено как ограничение стенда.
+- H1/H2/H2_CI/H3/H4 имеют verdict `pass`.
+- H4 выполнен повторяемой серией (`DWSS_BENCH_H4_RUNS > 1`) либо явно помечен как diagnostic-only.
+- В отчёте указаны commit, профиль env, OS/CPU/Go/Docker, seed/samples/runs и правило фильтрации выбросов.
+
+## Каталог графиков
+
+- `fig07_load_profile` — методика нагрузки: ramp-up, steady, ramp-down.
+- `fig01_tfirst_p50` — главный эффект по первичной метрике `T_first`.
+- `fig02_tfirst_runs` — разброс независимых run, filtered set и IQR-выбросы.
+- `fig03_hypotheses_h1_h2` — сводная проверка H1/H2/H2_CI/H3.
+- `fig04_cv_scenarios` — воспроизводимость и ограничения стенда.
+- `fig05_h4_p95` — overhead зеркалирования на active path.
+- `fig06_h4_blocks_timeseries` — диагностический график стабильности H4 steady-фазы.
 
 ## Гипотезы
 

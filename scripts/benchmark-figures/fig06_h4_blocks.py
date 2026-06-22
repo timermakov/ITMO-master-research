@@ -19,8 +19,8 @@ def plot(out_dir: Path, h4_path: Path | None = None) -> None:
     fig, ax = new_figure(width=170 / 25.4, height=75 / 25.4, ncols=2)
 
     for name, color, label in (
-        ("h4-mirror-off", COLORS["mirror_off"], "Mirror off"),
-        ("h4-mirror-on", COLORS["mirror_on"], "Mirror on"),
+        ("h4-mirror-off", COLORS["mirror_off"], "Зеркалирование выключено"),
+        ("h4-mirror-on", COLORS["mirror_on"], "Зеркалирование включено"),
     ):
         row = next(r for r in payload["results"] if r["scenario"] == name)
         blocks = [v * NS_TO_US for v in row.get("blockValuesNs", [])]
@@ -31,7 +31,7 @@ def plot(out_dir: Path, h4_path: Path | None = None) -> None:
 
     ax.set_xlabel("Номер блока (1 блок = 1 с steady)")
     ax.set_ylabel("Медиана E2E, мкс")
-    ax.set_title(f"H4 — block-medians (steady {steady_sec} с)")
+    ax.set_title(f"Диагностика H4: медианы 1-секундных блоков ({steady_sec} с)")
     ax.set_xlim(1, None)
     ax.legend(loc="upper right")
 
@@ -41,6 +41,7 @@ def plot(out_dir: Path, h4_path: Path | None = None) -> None:
         out_dir,
         stem,
         f"Рисунок 6 — Временной ряд медиан E2E задержки по 1-секундным блокам "
-        f"steady-фазы ({steady_sec} с) для mirror off и mirror on. "
-        f"Ramp-up и ramp-down в анализ не включались.",
+        f"steady-фазы ({steady_sec} с) при выключенном и включённом зеркалировании. "
+        f"Ramp-up и ramp-down в анализ не включались; график используется как диагностический "
+        f"контроль стабильности H4.",
     )

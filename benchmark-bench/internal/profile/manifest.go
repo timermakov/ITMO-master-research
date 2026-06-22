@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -25,6 +26,14 @@ type RunMeta struct {
 	StartedAt       time.Time `json:"startedAt"`
 	GOMAXPROCS      int       `json:"gomaxprocs"`
 	GitCommit       string    `json:"gitCommit"`
+	GitDirty        bool      `json:"gitDirty"`
+	GitStatus       string    `json:"gitStatus,omitempty"`
+	GoVersion       string    `json:"goVersion"`
+	OS              string    `json:"os"`
+	Arch            string    `json:"arch"`
+	NumCPU          int       `json:"numCpu"`
+	DockerVersion   string    `json:"dockerVersion,omitempty"`
+	DockerImages    []string  `json:"dockerImages,omitempty"`
 }
 
 // Manifest holds experiment environment metadata.
@@ -45,11 +54,18 @@ type Manifest struct {
 	SteadySec       int                     `json:"steadySec"`
 	RampDownSec     int                     `json:"rampDownSec"`
 	H4SteadySec     int                     `json:"h4SteadySec"`
+	H4Runs          int                     `json:"h4Runs"`
+	H4MaxRuns       int                     `json:"h4MaxRuns"`
 	CVThreshold     float64                 `json:"cvThreshold"`
+	CVThresholdS0   float64                 `json:"cvThresholdS0"`
+	CVThresholdSRef float64                 `json:"cvThresholdSRef"`
+	CVThresholdSDw  float64                 `json:"cvThresholdSDw"`
 	CooldownMs      int                     `json:"cooldownMs"`
+	EnvProfileName  string                  `json:"envProfileName,omitempty"`
 	TargetInst      string                  `json:"targetInstanceId"`
 	ActiveInst      string                  `json:"activeInstanceId"`
 	ReadyAfter      int                     `json:"readyAfter"`
+	ReadyAfterActual int                    `json:"readyAfterActual,omitempty"`
 }
 
 // LoadFromEnv builds manifest using required env vars.
@@ -107,6 +123,18 @@ func LoadFromEnv() (Manifest, error) {
 	if m.H4SteadySec, err = envcfg.RequiredInt("DWSS_BENCH_H4_STEADY_SEC"); err != nil {
 		return m, err
 	}
+	if m.H4Runs, err = envcfg.OptionalInt("DWSS_BENCH_H4_RUNS", minRuns); err != nil {
+		return m, err
+	}
+	if m.H4Runs < 1 {
+		return m, fmt.Errorf("DWSS_BENCH_H4_RUNS must be >= 1")
+	}
+	if m.H4MaxRuns, err = envcfg.OptionalInt("DWSS_BENCH_H4_MAX_RUNS", m.H4Runs); err != nil {
+		return m, err
+	}
+	if m.H4MaxRuns < m.H4Runs {
+		return m, fmt.Errorf("DWSS_BENCH_H4_MAX_RUNS=%d must be >= DWSS_BENCH_H4_RUNS=%d", m.H4MaxRuns, m.H4Runs)
+	}
 	if m.RampUpSec < 1 {
 		return m, fmt.Errorf("DWSS_BENCH_RAMP_UP_SEC must be >= 1")
 	}
@@ -121,7 +149,19 @@ func LoadFromEnv() (Manifest, error) {
 	if err != nil {
 		return m, err
 	}
+	if m.CVThresholdS0, err = optionalFloat("DWSS_BENCH_CV_THRESHOLD_S0", m.CVThreshold); err != nil {
+		return m, err
+	}
+	if m.CVThresholdSRef, err = optionalFloat("DWSS_BENCH_CV_THRESHOLD_S_REF", m.CVThreshold); err != nil {
+		return m, err
+	}
+	if m.CVThresholdSDw, err = optionalFloat("DWSS_BENCH_CV_THRESHOLD_S_DW", m.CVThreshold); err != nil {
+		return m, err
+	}
 	if m.CooldownMs, err = envcfg.RequiredInt("DWSS_BENCH_COOLDOWN_MS"); err != nil {
+		return m, err
+	}
+	if m.EnvProfileName, err = optionalString("DWSS_BENCH_ENV_PROFILE", ""); err != nil {
 		return m, err
 	}
 	if m.TargetInst, err = envcfg.Required("DWSS_BENCH_TARGET_INSTANCE"); err != nil {
@@ -135,6 +175,26 @@ func LoadFromEnv() (Manifest, error) {
 	}
 	m.Profile = warmkit.WorkloadProfile{Seed: m.Seed, Samples: m.Samples}
 	return m, nil
+}
+
+func optionalString(key, defaultValue string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue, nil
+	}
+	return value, nil
+}
+
+func optionalFloat(key string, defaultValue float64) (float64, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue, nil
+	}
+	out, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("environment variable %q: %w", key, err)
+	}
+	return out, nil
 }
 
 // LoadProfile builds the S_dw / production load shape.
@@ -168,7 +228,7 @@ func (m Manifest) TotalH4LoadSec() int {
 }
 
 // ValidateWarmupReadyAfter checks bench READY_AFTER matches warmup service config.
-func (m Manifest) ValidateWarmupReadyAfter() error {
+func (m *Manifest) ValidateWarmupReadyAfter() error {
 	resp, err := http.Get(m.WarmupURL + "/state")
 	if err != nil {
 		return fmt.Errorf("warmup state check: %w", err)
@@ -183,6 +243,7 @@ func (m Manifest) ValidateWarmupReadyAfter() error {
 	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
 		return err
 	}
+	m.ReadyAfterActual = snap.Warmkit.ReadyAfter
 	if snap.Warmkit.ReadyAfter != m.ReadyAfter {
 		return fmt.Errorf(
 			"DWSS_BENCH_READY_AFTER=%d but warmup readyAfter=%d (sync with DWSS_WARMUP_READY_AFTER)",
@@ -197,11 +258,64 @@ func collectRunMeta() RunMeta {
 	if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
 		commit = strings.TrimSpace(string(out))
 	}
+	status := gitStatus()
 	return RunMeta{
 		ProtocolVersion: ProtocolVersion,
 		StartedAt:       time.Now().UTC(),
 		GOMAXPROCS:      runtime.GOMAXPROCS(0),
 		GitCommit:       commit,
+		GitDirty:        status != "",
+		GitStatus:       status,
+		GoVersion:       runtime.Version(),
+		OS:              runtime.GOOS,
+		Arch:            runtime.GOARCH,
+		NumCPU:          runtime.NumCPU(),
+		DockerVersion:   commandOutput("docker", "--version"),
+		DockerImages:    dockerImages(),
+	}
+}
+
+func gitStatus() string {
+	return commandOutput("git", "status", "--short")
+}
+
+func dockerImages() []string {
+	out := commandOutput("docker", "compose", "-f", "../deploy/docker-compose.yml", "images", "-q")
+	if out == "" {
+		out = commandOutput("docker", "compose", "-f", "deploy/docker-compose.yml", "images", "-q")
+	}
+	if out == "" {
+		return nil
+	}
+	lines := strings.Split(out, "\n")
+	images := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			images = append(images, line)
+		}
+	}
+	return images
+}
+
+func commandOutput(name string, args ...string) string {
+	out, err := exec.Command(name, args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func (m Manifest) CVThresholdForScenario(scenario string) float64 {
+	switch scenario {
+	case "s0-control":
+		return m.CVThresholdS0
+	case "s-ref":
+		return m.CVThresholdSRef
+	case "s-dw":
+		return m.CVThresholdSDw
+	default:
+		return m.CVThreshold
 	}
 }
 

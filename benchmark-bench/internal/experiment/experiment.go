@@ -33,6 +33,8 @@ type RunRecord struct {
 // Result is one scenario output.
 type Result struct {
 	Scenario     string        `json:"scenario"`
+	DisplayName  string        `json:"displayName,omitempty"`
+	Description  string        `json:"description,omitempty"`
 	Summary      stats.Summary `json:"summary"`
 	E2ESummary   stats.Summary `json:"e2eSummary,omitempty"`
 	BlockSummary stats.Summary `json:"blockSummary,omitempty"`
@@ -111,15 +113,33 @@ func RunH4Overhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
 		{"h4-mirror-on", true, 1.0},
 	}
 	for _, ph := range phases {
-		cfg := warmkit.MirrorConfig{
-			Enabled:          ph.enabled,
-			Ratio:            ph.ratio,
-			TargetInstanceID: m.TargetInst,
-			ActiveInstanceID: m.ActiveInst,
-		}
-		if err := coord.MirrorConfig(m.CoordURL, cfg); err != nil {
+		res, err := runH4Phase(ctx, m, ph.name, ph.enabled, ph.ratio)
+		if err != nil {
 			return nil, err
 		}
+		out = append(out, res)
+	}
+	_ = coord.BaselineMirror(m.CoordURL, m.ActiveInst)
+	return out, nil
+}
+
+func runH4Phase(ctx context.Context, m profile.Manifest, name string, enabled bool, ratio float64) (Result, error) {
+	cfg := warmkit.MirrorConfig{
+		Enabled:          enabled,
+		Ratio:            ratio,
+		TargetInstanceID: m.TargetInst,
+		ActiveInstanceID: m.ActiveInst,
+	}
+	if err := coord.MirrorConfig(m.CoordURL, cfg); err != nil {
+		return Result{}, err
+	}
+
+	records := make([]RunRecord, 0, m.H4MaxRuns)
+	runP95Values := make([]float64, 0, m.H4MaxRuns)
+	allBlockValues := make([]float64, 0, m.H4MaxRuns*m.H4SteadySec)
+	allRTTValues := make([]float64, 0)
+
+	for attempt := 1; attempt <= m.H4MaxRuns; attempt++ {
 		m.Cooldown()
 		lp := m.H4LoadProfile()
 		totalSec := m.TotalH4LoadSec()
@@ -127,26 +147,35 @@ func RunH4Overhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
 		rttRes, err := loadgen.CollectRTTPhased(loadCtx, m.ProxyURL, m.Profile, lp)
 		cancel()
 		if err != nil && len(rttRes.Steady) == 0 {
-			return nil, err
+			return Result{}, err
 		}
-		rawFloats := intsToFloats(rttRes.All)
 		blocks := loadgen.BlockMedians(rttRes.Steady, m.RPS)
-		filtered, outliers := stats.FilterIQRIndexed(blocks)
-		blockSum := stats.SummarizeFiltered(blocks, filtered, outliers)
-		cv := stats.EvaluateCV(blockSum, m.CVThreshold)
-		out = append(out, Result{
-			Scenario:     ph.name,
-			Summary:      blockSum,
-			BlockSummary: blockSum,
-			Values:       rawFloats,
-			BlockValues:  blocks,
-			CVPass:       cv.Pass,
-			CVPassReason: cv.Reason,
-			Hypothesis:   "H4: p95 mirror-on vs mirror-off on proxy /work E2E (block medians)",
+		if len(blocks) == 0 {
+			return Result{}, fmt.Errorf("[%s] no H4 steady blocks", name)
+		}
+		blockSum := stats.SummarizeFilteredWithSeed(blocks, blocks, nil, m.Seed)
+		runP95 := blockSum.P95
+		runP95Values = append(runP95Values, runP95)
+		allBlockValues = append(allBlockValues, blocks...)
+		allRTTValues = append(allRTTValues, intsToFloats(rttRes.All)...)
+		records = append(records, RunRecord{
+			RunIndex: len(records) + 1,
+			Attempt:  attempt,
+			Probe: probe.Sample{
+				WorkloadNs: int64(runP95),
+				E2ENs:      int64(blockSum.P50),
+			},
 		})
+
+		if len(records) >= m.H4Runs {
+			res := buildH4Result(name, records, runP95Values, allRTTValues, allBlockValues, m)
+			if res.CVPass || len(records) >= m.H4MaxRuns || !m.ProfileOnHighCV {
+				return res, nil
+			}
+			log.Printf("[%s] H4 CV fail (%s), collecting up to %d runs", name, res.CVPassReason, m.H4MaxRuns)
+		}
 	}
-	_ = coord.BaselineMirror(m.CoordURL, m.ActiveInst)
-	return out, nil
+	return buildH4Result(name, records, runP95Values, allRTTValues, allBlockValues, m), nil
 }
 
 func runIndependent(m profile.Manifest, name string, warmup func(context.Context) error, trackReady bool, _ string) (Result, error) {
@@ -204,7 +233,7 @@ func runIndependent(m profile.Manifest, name string, warmup func(context.Context
 		m.Cooldown()
 
 		if len(records) >= m.Runs {
-			res := buildResult(name, records, values, e2e, m.CVThreshold)
+			res := buildResult(name, records, values, e2e, m)
 			if res.CVPass || len(records) >= maxValid || !m.ProfileOnHighCV {
 				return res, nil
 			}
@@ -214,18 +243,21 @@ func runIndependent(m profile.Manifest, name string, warmup func(context.Context
 	if len(records) == 0 {
 		return Result{}, fmt.Errorf("[%s] no valid runs after %d attempts", name, maxAttempts)
 	}
-	res := buildResult(name, records, values, e2e, m.CVThreshold)
+	res := buildResult(name, records, values, e2e, m)
 	return res, nil
 }
 
-func buildResult(name string, records []RunRecord, values, e2e []float64, cvThreshold float64) Result {
+func buildResult(name string, records []RunRecord, values, e2e []float64, m profile.Manifest) Result {
 	filtered, outliers := stats.FilterIQRIndexed(values)
-	sum := stats.SummarizeFiltered(values, filtered, outliers)
+	sum := stats.SummarizeFilteredWithSeed(values, filtered, outliers, m.Seed)
 	e2eFiltered, e2eOutliers := stats.FilterIQRIndexed(e2e)
-	e2eSum := stats.SummarizeFiltered(e2e, e2eFiltered, e2eOutliers)
-	cv := stats.EvaluateCV(sum, cvThreshold)
+	e2eSum := stats.SummarizeFilteredWithSeed(e2e, e2eFiltered, e2eOutliers, m.Seed)
+	cv := stats.EvaluateCV(sum, m.CVThresholdForScenario(name))
+	displayName, description := ScenarioInfo(name)
 	return Result{
 		Scenario:     name,
+		DisplayName:  displayName,
+		Description:  description,
 		Summary:      sum,
 		E2ESummary:   e2eSum,
 		Values:       values,
@@ -233,6 +265,53 @@ func buildResult(name string, records []RunRecord, values, e2e []float64, cvThre
 		Runs:         records,
 		CVPass:       cv.Pass,
 		CVPassReason: cv.Reason,
+	}
+}
+
+func buildH4Result(name string, records []RunRecord, runP95Values, allRTTValues, allBlockValues []float64, m profile.Manifest) Result {
+	filtered, outliers := stats.FilterIQRIndexed(runP95Values)
+	sum := stats.SummarizeFilteredWithSeed(runP95Values, filtered, outliers, m.Seed)
+	blockFiltered, blockOutliers := stats.FilterIQRIndexed(allBlockValues)
+	blockSum := stats.SummarizeFilteredWithSeed(allBlockValues, blockFiltered, blockOutliers, m.Seed)
+	values := runP95Values
+	if len(records) < 5 {
+		// Diagnostic H4 runs do not have enough run-level samples for CV/CI, so
+		// keep the legacy block-level statistic while still preserving runs[].
+		sum = blockSum
+		values = allBlockValues
+	}
+	cv := stats.EvaluateCV(sum, m.CVThreshold)
+	displayName, description := ScenarioInfo(name)
+	return Result{
+		Scenario:     name,
+		DisplayName:  displayName,
+		Description:  description,
+		Summary:      sum,
+		BlockSummary: blockSum,
+		Values:       values,
+		E2EValues:    allRTTValues,
+		BlockValues:  allBlockValues,
+		Runs:         records,
+		CVPass:       cv.Pass,
+		CVPassReason: cv.Reason,
+		Hypothesis:   "H4: run-level p95 mirror-on vs mirror-off on proxy /work E2E",
+	}
+}
+
+func ScenarioInfo(name string) (string, string) {
+	switch name {
+	case "s0-control":
+		return "Без прогрева", "Холодный warmup-инстанс сразу получает первый боевой GET /work."
+	case "s-ref":
+		return "Ручной прогрев", "Перед первым боевым GET /work выполняется эталонный POST /warmup с тем же WorkloadProfile."
+	case "s-dw":
+		return "Динамический прогрев", "Новый инстанс прогревается зеркалированным GET-трафиком через СДПС и переводится в ready."
+	case "h4-mirror-off":
+		return "Зеркалирование выключено", "Базовая E2E задержка active path через mirror-proxy."
+	case "h4-mirror-on":
+		return "Зеркалирование включено", "E2E задержка active path при асинхронном mirror-трафике на warmup."
+	default:
+		return name, ""
 	}
 }
 
@@ -255,10 +334,17 @@ func intsToFloats(in []int64) []float64 {
 
 // EvaluateH4 compares mirror-on vs mirror-off p95 E2E on proxy /work (block medians).
 func EvaluateH4(off, on Result) string {
-	if on.Summary.P95 <= off.Summary.P95*1.05 {
+	if h4Observed(on) <= h4Observed(off)*1.05 {
 		return "pass"
 	}
 	return "fail"
+}
+
+func h4Observed(r Result) float64 {
+	if len(r.Runs) > 0 {
+		return r.Summary.P50
+	}
+	return r.Summary.P95
 }
 
 // EvaluateHypotheses compares scenario medians for H1/H2/H3 notes.

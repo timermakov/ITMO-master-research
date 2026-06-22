@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -22,6 +23,28 @@ import fig05_h4_p95 as f05
 import fig06_h4_blocks as f06
 import fig07_load_profile as f07
 from common.data import project_root
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def source_meta(path: Path) -> dict:
+    with path.open(encoding="utf-8") as f:
+        payload = json.load(f)
+    manifest = payload.get("manifest", {})
+    return {
+        "path": str(path.resolve()),
+        "sha256": sha256_file(path),
+        "protocolVersion": manifest.get("protocolVersion"),
+        "gitCommit": manifest.get("gitCommit"),
+        "startedAt": manifest.get("startedAt"),
+        "hypotheses": payload.get("hypotheses", {}),
+    }
 
 
 def main() -> int:
@@ -83,6 +106,10 @@ def main() -> int:
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "fullResults": str(full_path.resolve()),
         "h4Results": str(h4_path.resolve()) if h4_path.is_file() else None,
+        "sources": {
+            "full": source_meta(full_path),
+            "h4": source_meta(h4_path) if h4_path.is_file() else None,
+        },
         "figures": figures,
     }
     (out_dir / "manifest.json").write_text(

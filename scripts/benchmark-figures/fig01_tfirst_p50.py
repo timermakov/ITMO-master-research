@@ -58,7 +58,7 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel(r"$T_{\mathrm{first}}$, P50, мкс")
-    ax.set_title("Сравнение сценариев прогрева (протокол v2)")
+    ax.set_title("Первый боевой запрос после прогрева")
 
     for bar, val in zip(bars, p50, strict=True):
         ax.text(
@@ -69,6 +69,17 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
             va="bottom",
             fontsize=7,
         )
+    if len(p50) == 3 and p50[2] > 0:
+        speedup = p50[0] / p50[2]
+        ax.annotate(
+            f"динамический прогрев\nбыстрее холодного старта в {speedup:.0f}x",
+            xy=(2, p50[2]),
+            xytext=(1.15, p50[0] / 3),
+            arrowprops={"arrowstyle": "->", "linewidth": 0.8, "color": COLORS["threshold"]},
+            fontsize=7,
+            ha="left",
+            va="center",
+        )
 
     stem = "fig01_tfirst_p50"
     save_figure(fig, out_dir, stem)
@@ -76,8 +87,8 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
         out_dir,
         stem,
         f"Рисунок 1 — Медиана (P50) первичной метрики $T_{{\\mathrm{{first}}}}$ "
-        f"по сценариям $S_0$, $S_{{\\mathrm{{ref}}}}$, $S_{{\\mathrm{{dw}}}}$ "
+        f"для трёх сценариев: без прогрева, ручной прогрев и динамический прогрев СДПС "
         f"(N={manifest['runs']}, seed={manifest['seed']}, samples={manifest['samples']}). "
         f"Столбцы — P50; вертикальные отрезки — 95\\% bootstrap ДИ для P50. "
-        f"Логарифмическая шкала по оси ординат.",
+        f"Логарифмическая шкала нужна из-за разницы порядков между холодным стартом и прогретыми сценариями.",
     )

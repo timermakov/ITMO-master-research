@@ -32,11 +32,16 @@ type CVVerdict struct {
 // Summarize computes statistics for latency samples in nanoseconds.
 func Summarize(values []float64) Summary {
 	filtered, outliers := FilterIQRIndexed(values)
-	return SummarizeFiltered(values, filtered, outliers)
+	return SummarizeFilteredWithSeed(values, filtered, outliers, 42)
 }
 
 // SummarizeFiltered computes stats on filtered values while reporting N from all samples.
 func SummarizeFiltered(all []float64, filtered []float64, outlierRuns []int) Summary {
+	return SummarizeFilteredWithSeed(all, filtered, outlierRuns, 42)
+}
+
+// SummarizeFilteredWithSeed computes stats with a reproducible bootstrap seed.
+func SummarizeFilteredWithSeed(all []float64, filtered []float64, outlierRuns []int, seed int64) Summary {
 	n := len(filtered)
 	if n == 0 {
 		return Summary{N: len(all), NFiltered: 0, Outliers: outlierRuns}
@@ -60,8 +65,8 @@ func SummarizeFiltered(all []float64, filtered []float64, outlierRuns []int) Sum
 	if mean > 0 {
 		cv = (std / mean) * 100
 	}
-	ciLow, ciHigh := bootstrapCI(cp, 2000, 0.95, bootstrapMean)
-	p50Low, p50High := bootstrapCI(cp, 2000, 0.95, bootstrapPercentile(0.50))
+	ciLow, ciHigh := bootstrapCI(cp, 2000, 0.95, bootstrapMean, seed)
+	p50Low, p50High := bootstrapCI(cp, 2000, 0.95, bootstrapPercentile(0.50), seed)
 	return Summary{
 		Mean:      mean,
 		P50:       Percentile(cp, 0.50),
@@ -177,11 +182,11 @@ func bootstrapPercentile(p float64) bootstrapStat {
 	}
 }
 
-func bootstrapCI(data []float64, iterations int, level float64, stat bootstrapStat) (float64, float64) {
+func bootstrapCI(data []float64, iterations int, level float64, stat bootstrapStat, seed int64) (float64, float64) {
 	if len(data) == 0 {
 		return 0, 0
 	}
-	rng := rand.New(rand.NewSource(42))
+	rng := rand.New(rand.NewSource(seed))
 	samples := make([]float64, iterations)
 	n := len(data)
 	for i := 0; i < iterations; i++ {

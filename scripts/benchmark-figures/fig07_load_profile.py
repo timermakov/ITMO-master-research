@@ -39,13 +39,13 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
 
     fig, ax = new_figure(width=170 / 25.4, height=58 / 25.4, ncols=2)
     ax.plot(t, rps, color=COLORS["s_dw"], linewidth=1.2, zorder=3)
-    ax.axvspan(0, ramp, alpha=0.12, color=COLORS["s_ref"], label="Ramp-up")
-    ax.axvspan(ramp, ramp + steady, alpha=0.12, color=COLORS["s0"], label="Steady (метрики)")
-    ax.axvspan(ramp + steady, total, alpha=0.12, color=COLORS["mirror_on"], label="Ramp-down")
+    ax.axvspan(0, ramp, alpha=0.12, color=COLORS["s_ref"], label="Наращивание нагрузки")
+    ax.axvspan(ramp, ramp + steady, alpha=0.12, color=COLORS["s0"], label="Стабильная фаза: прогрев и метрики")
+    ax.axvspan(ramp + steady, total, alpha=0.12, color=COLORS["mirror_on"], label="Снижение нагрузки")
 
     ax.set_xlabel("Время, с")
     ax.set_ylabel("Целевой RPS")
-    ax.set_title("Профиль нагрузки loadgen (протокол v2)")
+    ax.set_title("Профиль нагрузки бенчмарка")
     ax.set_xlim(0, total)
     ax.set_ylim(0, max_rps * 1.08)
     ax.legend(loc="upper right", ncol=3, fontsize=10)
@@ -55,7 +55,8 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
     write_caption(
         out_dir,
         stem,
-        f"Рисунок 7 — Трёхфазный профиль нагрузки: ramp-up {ramp} с, "
-        f"steady {steady} с (окно съёма метрик), ramp-down {down} с; "
-        f"max RPS = {max_rps}. Линейный рост/спад RPS согласно методике нагрузочного тестирования.",
+        f"Рисунок 7 — Трёхфазный профиль нагрузки бенчмарка: наращивание {ramp} с, "
+        f"стабильная фаза {steady} с, снижение {down} с; max RPS = {max_rps}. "
+        f"Для динамического прогрева стабильная фаза обеспечивает shadow-трафик, а для H4 "
+        f"метрики берутся только из стабильного окна.",
     )

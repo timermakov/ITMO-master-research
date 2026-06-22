@@ -128,5 +128,24 @@ func reportCmd(args []string) {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	in := fs.String("in", "results", "input directory")
 	_ = fs.Parse(args)
-	fmt.Println("report from", *in)
+	payload, err := report.ReadPayload(*in + "/results.json")
+	if err != nil {
+		log.Fatal(err)
+	}
+	warnings, ok := report.ValidatePayload(payload)
+	for _, warning := range warnings {
+		fmt.Println("WARN:", warning)
+	}
+	if len(payload.Hypotheses) > 0 {
+		fmt.Println("hypotheses:")
+		for _, key := range []string{"H1", "H2", "H2_CI", "H3", "H4"} {
+			if value, found := payload.Hypotheses[key]; found {
+				fmt.Printf("- %s: %s\n", key, value)
+			}
+		}
+	}
+	if !ok {
+		log.Fatal("report validation failed")
+	}
+	fmt.Println("report validation passed")
 }

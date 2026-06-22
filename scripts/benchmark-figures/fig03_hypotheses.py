@@ -1,13 +1,15 @@
-"""Рис. 3 — проверка гипотез H1 и H2 (отношения медиан)."""
+"""Рис. 3 — сводная проверка гипотез benchmark."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-
 from common.data import load_full_results, summary_us
-from common.style import COLORS, apply_thesis_style, new_figure, save_figure, write_caption
+from common.style import apply_thesis_style, new_figure, save_figure, write_caption
+
+
+def _verdict(value: str) -> str:
+    return "пройдено" if value == "pass" else "не пройдено" if value == "fail" else value
 
 
 def plot(out_dir: Path, full_path: Path | None = None) -> None:
@@ -24,34 +26,44 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
     h1_bound = 0.5
     h2_bound = 1.1
 
-    labels = [r"$S_{\mathrm{dw}}/S_0$" + f"\n(H1, {hypo.get('H1', '?')})",
-              r"$S_{\mathrm{dw}}/S_{\mathrm{ref}}$" + f"\n(H2, {hypo.get('H2', '?')})"]
-    values = [h1_ratio, h2_ratio]
-    bounds = [h1_bound, h2_bound]
+    rows = [
+        ["H1", "динамический прогрев ≤ 1/2 холодного старта", f"{h1_ratio:.3f} ≤ {h1_bound:.1f}", _verdict(hypo.get("H1", "?"))],
+        ["H2", "динамический прогрев не хуже ручного более чем на 10%", f"{h2_ratio:.3f} ≤ {h2_bound:.1f}", _verdict(hypo.get("H2", "?"))],
+        ["H2_CI", "верхняя 95% ДИ P50 динамического ≤ ручной ×1,1", "см. results.json", _verdict(hypo.get("H2_CI", "?"))],
+        ["H3", "readyz=200 после динамического прогрева", "readyz проверен", _verdict(hypo.get("H3", "?"))],
+    ]
 
-    fig, ax = new_figure()
-    x = np.arange(2)
-    colors = [COLORS["s_dw"] if v <= b else "#999999" for v, b in zip(values, bounds, strict=True)]
-    ax.bar(x, values, color=colors, edgecolor="black", linewidth=0.6, width=0.45, zorder=3)
-    ax.axhline(h1_bound, color=COLORS["threshold"], linestyle="--", linewidth=1.0, label=r"H1: $\leq 0{,}5$")
-    ax.axhline(h2_bound, color=COLORS["threshold"], linestyle=":", linewidth=1.0, label=r"H2: $\leq 1{,}1$")
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.set_ylabel("Отношение P50")
-    ax.set_ylim(0, max(values + bounds) * 1.25)
-    ax.legend(loc="upper right")
-
-    for i, val in enumerate(values):
-        ax.text(i, val + 0.02, f"{val:.3f}", ha="center", va="bottom", fontsize=11)
+    fig, ax = new_figure(width=200 / 25.4, height=82 / 25.4, ncols=2)
+    ax.axis("off")
+    ax.set_title("Сводная проверка гипотез")
+    table = ax.table(
+        cellText=rows,
+        colLabels=["ID", "Критерий", "Наблюдаемое", "Итог"],
+        cellLoc="left",
+        colLoc="left",
+        loc="center",
+        colWidths=[0.10, 0.48, 0.24, 0.12],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(7)
+    table.scale(1, 1.4)
+    for (row, col), cell in table.get_celld().items():
+        cell.set_linewidth(0.4)
+        if row == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#EFEFEF")
+        elif col == 3:
+            cell.set_text_props(weight="bold")
+            if cell.get_text().get_text() == "пройдено":
+                cell.set_facecolor("#DDEEDD")
 
     stem = "fig03_hypotheses_h1_h2"
     save_figure(fig, out_dir, stem)
     write_caption(
         out_dir,
         stem,
-        "Рисунок 3 — Проверка гипотез H1 и H2 по отношению медиан P50 метрики "
-        f"$T_{{\\mathrm{{first}}}}$: H1 — $S_{{\\mathrm{{dw}}}}/S_0 = {h1_ratio:.3f}$ "
-        f"(порог 0,5); H2 — $S_{{\\mathrm{{dw}}}}/S_{{\\mathrm{{ref}}}} = {h2_ratio:.3f}$ "
-        f"(порог 1,1). H2_CI: {hypo.get('H2_CI', '?')}; H3: {hypo.get('H3', '?')}.",
+        "Рисунок 3 — Сводная проверка гипотез бенчмарка. H1 сравнивает динамический "
+        f"прогрев с холодным стартом ({h1_ratio:.3f} при пороге 0,5), H2 — с ручным "
+        f"прогревом ({h2_ratio:.3f} при пороге 1,1). H2_CI проверяет верхнюю границу "
+        f"95\\% bootstrap ДИ, H3 фиксирует успешную готовность warmup-инстанса.",
     )

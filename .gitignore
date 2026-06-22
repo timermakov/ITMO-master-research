@@ -17,5 +17,10 @@ LoadedService/data/
 
 **/__pycache__/
 *.pyc
-figures/
+figures/*
+!figures/
+!figures/README.md
+!figures/manifest.json
+!figures/*_caption.txt
+figures_tmp/
 .DS_Store
