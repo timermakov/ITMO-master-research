@@ -25,7 +25,9 @@ func MirrorConfig(coordURL string, cfg warmkit.MirrorConfig) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("mirror config status %d", resp.StatusCode)
 	}
@@ -52,7 +54,9 @@ func StartSession(coordURL, targetID, activeID string, readyAfter int) (string, 
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("session status %d", resp.StatusCode)
 	}

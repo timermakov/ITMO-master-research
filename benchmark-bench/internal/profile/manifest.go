@@ -39,33 +39,33 @@ type RunMeta struct {
 // Manifest holds experiment environment metadata.
 type Manifest struct {
 	RunMeta
-	Seed            int64                   `json:"seed"`
-	Samples         int                     `json:"samples"`
-	Runs            int                     `json:"runs"`
-	MaxRuns         int                     `json:"maxRuns"`
-	ProfileOnHighCV bool                    `json:"profileOnHighCv"`
-	Profile         warmkit.WorkloadProfile `json:"profile"`
-	ProxyURL        string                  `json:"proxyUrl"`
-	WarmupURL       string                  `json:"warmupUrl"`
-	CoordURL        string                  `json:"coordUrl"`
-	ActiveURL       string                  `json:"activeUrl"`
-	RPS             int                     `json:"rps"`
-	RampUpSec       int                     `json:"rampUpSec"`
-	SteadySec       int                     `json:"steadySec"`
-	RampDownSec     int                     `json:"rampDownSec"`
-	H4SteadySec     int                     `json:"h4SteadySec"`
-	H4Runs          int                     `json:"h4Runs"`
-	H4MaxRuns       int                     `json:"h4MaxRuns"`
-	CVThreshold     float64                 `json:"cvThreshold"`
-	CVThresholdS0   float64                 `json:"cvThresholdS0"`
-	CVThresholdSRef float64                 `json:"cvThresholdSRef"`
-	CVThresholdSDw  float64                 `json:"cvThresholdSDw"`
-	CooldownMs      int                     `json:"cooldownMs"`
-	EnvProfileName  string                  `json:"envProfileName,omitempty"`
-	TargetInst      string                  `json:"targetInstanceId"`
-	ActiveInst      string                  `json:"activeInstanceId"`
-	ReadyAfter      int                     `json:"readyAfter"`
-	ReadyAfterActual int                    `json:"readyAfterActual,omitempty"`
+	Seed             int64                   `json:"seed"`
+	Samples          int                     `json:"samples"`
+	Runs             int                     `json:"runs"`
+	MaxRuns          int                     `json:"maxRuns"`
+	ProfileOnHighCV  bool                    `json:"profileOnHighCv"`
+	Profile          warmkit.WorkloadProfile `json:"profile"`
+	ProxyURL         string                  `json:"proxyUrl"`
+	WarmupURL        string                  `json:"warmupUrl"`
+	CoordURL         string                  `json:"coordUrl"`
+	ActiveURL        string                  `json:"activeUrl"`
+	RPS              int                     `json:"rps"`
+	RampUpSec        int                     `json:"rampUpSec"`
+	SteadySec        int                     `json:"steadySec"`
+	RampDownSec      int                     `json:"rampDownSec"`
+	H4SteadySec      int                     `json:"h4SteadySec"`
+	H4Runs           int                     `json:"h4Runs"`
+	H4MaxRuns        int                     `json:"h4MaxRuns"`
+	CVThreshold      float64                 `json:"cvThreshold"`
+	CVThresholdS0    float64                 `json:"cvThresholdS0"`
+	CVThresholdSRef  float64                 `json:"cvThresholdSRef"`
+	CVThresholdSDw   float64                 `json:"cvThresholdSDw"`
+	CooldownMs       int                     `json:"cooldownMs"`
+	EnvProfileName   string                  `json:"envProfileName,omitempty"`
+	TargetInst       string                  `json:"targetInstanceId"`
+	ActiveInst       string                  `json:"activeInstanceId"`
+	ReadyAfter       int                     `json:"readyAfter"`
+	ReadyAfterActual int                     `json:"readyAfterActual,omitempty"`
 }
 
 // LoadFromEnv builds manifest using required env vars.
@@ -233,7 +233,9 @@ func (m *Manifest) ValidateWarmupReadyAfter() error {
 	if err != nil {
 		return fmt.Errorf("warmup state check: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("warmup state status %d", resp.StatusCode)
 	}

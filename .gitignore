@@ -10,6 +10,7 @@ results/
 .vscode/
 .cursor/
 .idea/
+.cache/
 tmp/
 
 LoadedService/bin/

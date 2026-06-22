@@ -27,7 +27,9 @@ func TFirst(baseURL string, p warmkit.WorkloadProfile) (Sample, error) {
 	if err != nil {
 		return Sample{}, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	e2e := time.Since(start).Nanoseconds()
 	if resp.StatusCode != http.StatusOK {
 		return Sample{}, fmt.Errorf("probe status %d", resp.StatusCode)

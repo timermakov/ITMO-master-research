@@ -33,12 +33,16 @@ func TestSummarizeBasic(t *testing.T) {
 
 func TestBootstrapCI(t *testing.T) {
 	data := []float64{10, 20, 30, 40, 50}
-	low, high := bootstrapCI(data, 500, 0.95, bootstrapMean)
+	low, high := bootstrapCI(data, 500, 0.95, bootstrapMean, 42)
 	if low >= high {
 		t.Fatalf("ci invalid: %f %f", low, high)
 	}
 	if low > 30 || high < 30 {
 		t.Fatalf("ci should bracket mean: %f %f", low, high)
+	}
+	low2, high2 := bootstrapCI(data, 500, 0.95, bootstrapMean, 42)
+	if low != low2 || high != high2 {
+		t.Fatalf("ci should be reproducible for the same seed: [%f, %f] vs [%f, %f]", low, high, low2, high2)
 	}
 }
 

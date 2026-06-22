@@ -25,7 +25,9 @@ func FetchState(warmupURL string) (StateSnapshot, error) {
 	if err != nil {
 		return snap, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return snap, fmt.Errorf("state status %d", resp.StatusCode)
 	}
