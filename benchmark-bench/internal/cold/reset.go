@@ -6,13 +6,15 @@ import (
 	"time"
 )
 
+var httpClient = &http.Client{Timeout: 10 * time.Second}
+
 // ResetWarmup returns the warmup instance to cold workload + Registered warmkit state.
 func ResetWarmup(warmupURL string) error {
 	req, err := http.NewRequest(http.MethodPost, warmupURL+"/reset", nil)
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -29,7 +31,7 @@ func ResetWarmup(warmupURL string) error {
 func WaitReady(warmupURL string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(warmupURL + "/readyz")
+		resp, err := httpClient.Get(warmupURL + "/readyz")
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {

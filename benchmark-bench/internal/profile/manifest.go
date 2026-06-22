@@ -20,6 +20,8 @@ const ProtocolVersion = "2"
 
 const minRuns = 5
 
+var httpClient = &http.Client{Timeout: 10 * time.Second}
+
 // RunMeta captures reproducibility metadata written into every manifest.
 type RunMeta struct {
 	ProtocolVersion string    `json:"protocolVersion"`
@@ -229,7 +231,7 @@ func (m Manifest) TotalH4LoadSec() int {
 
 // ValidateWarmupReadyAfter checks bench READY_AFTER matches warmup service config.
 func (m *Manifest) ValidateWarmupReadyAfter() error {
-	resp, err := http.Get(m.WarmupURL + "/state")
+	resp, err := httpClient.Get(m.WarmupURL + "/state")
 	if err != nil {
 		return fmt.Errorf("warmup state check: %w", err)
 	}

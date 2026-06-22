@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -18,6 +19,8 @@ func RunPhased(ctx context.Context, proxyURL string, wp warmkit.WorkloadProfile,
 	path := fmt.Sprintf("/work?seed=%d&samples=%d", wp.Seed, wp.Samples)
 	client := &http.Client{Timeout: 30 * time.Second}
 	start := time.Now()
+	lastLogSec := -30
+	lastPhase := ""
 	for {
 		elapsed := time.Since(start).Seconds()
 		if elapsed >= float64(lp.TotalSec()) {
@@ -32,6 +35,13 @@ func RunPhased(ctx context.Context, proxyURL string, wp warmkit.WorkloadProfile,
 		if rps <= 0 {
 			time.Sleep(50 * time.Millisecond)
 			continue
+		}
+		phase := lp.Phase(elapsed)
+		elapsedSec := int(elapsed)
+		if phase != lastPhase || elapsedSec-lastLogSec >= 30 {
+			log.Printf("[loadgen] phase=%s elapsed=%ds/%ds target_rps=%d", phase, elapsedSec, lp.TotalSec(), rps)
+			lastPhase = phase
+			lastLogSec = elapsedSec
 		}
 		interval := time.Second / time.Duration(rps)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxyURL+path, nil)
@@ -63,6 +73,8 @@ func CollectRTTPhased(ctx context.Context, proxyURL string, wp warmkit.WorkloadP
 	path := fmt.Sprintf("/work?seed=%d&samples=%d", wp.Seed, wp.Samples)
 	client := &http.Client{Timeout: 30 * time.Second}
 	start := time.Now()
+	lastLogSec := -30
+	lastPhase := ""
 	for {
 		elapsed := time.Since(start).Seconds()
 		if elapsed >= float64(lp.TotalSec()) {
@@ -77,6 +89,14 @@ func CollectRTTPhased(ctx context.Context, proxyURL string, wp warmkit.WorkloadP
 		if rps <= 0 {
 			time.Sleep(50 * time.Millisecond)
 			continue
+		}
+		phase := lp.Phase(elapsed)
+		elapsedSec := int(elapsed)
+		if phase != lastPhase || elapsedSec-lastLogSec >= 30 {
+			log.Printf("[loadgen] phase=%s elapsed=%ds/%ds target_rps=%d samples=%d steady_samples=%d",
+				phase, elapsedSec, lp.TotalSec(), rps, len(out.All), len(out.Steady))
+			lastPhase = phase
+			lastLogSec = elapsedSec
 		}
 		interval := time.Second / time.Duration(rps)
 		t0 := time.Now()

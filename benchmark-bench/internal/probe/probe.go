@@ -9,6 +9,8 @@ import (
 	"github.com/itmo-vkr/dwss/warmkit"
 )
 
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
 // Sample holds primary (workload) and secondary (E2E) latency for one probe.
 type Sample struct {
 	WorkloadNs int64 `json:"workloadNs"`
@@ -23,7 +25,7 @@ func TFirst(baseURL string, p warmkit.WorkloadProfile) (Sample, error) {
 		return Sample{}, err
 	}
 	start := time.Now()
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return Sample{}, err
 	}

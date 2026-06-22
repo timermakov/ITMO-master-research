@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/itmo-vkr/dwss/warmkit"
 )
+
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // MirrorConfig sets mirror routing via coordinator (sole ZK writer).
 func MirrorConfig(coordURL string, cfg warmkit.MirrorConfig) error {
@@ -21,7 +24,7 @@ func MirrorConfig(coordURL string, cfg warmkit.MirrorConfig) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -50,7 +53,12 @@ func StartSession(coordURL, targetID, activeID string, readyAfter int) (string, 
 		"activeInstanceId": activeID,
 		"readyAfter":       readyAfter,
 	})
-	resp, err := http.Post(coordURL+"/v1/warmup/sessions", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, coordURL+"/v1/warmup/sessions", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -72,19 +80,23 @@ func StartSession(coordURL, targetID, activeID string, readyAfter int) (string, 
 // WaitSessionCompleted polls until session status is completed.
 func WaitSessionCompleted(coordURL, sessionID string, timeoutSec int) error {
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	lastStatus := "unknown"
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(coordURL + "/v1/warmup/sessions/" + sessionID)
+		resp, err := httpClient.Get(coordURL + "/v1/warmup/sessions/" + sessionID)
 		if err == nil {
 			var s struct {
 				Status string `json:"status"`
 			}
-			_ = json.NewDecoder(resp.Body).Decode(&s)
+			if err := json.NewDecoder(resp.Body).Decode(&s); err == nil && s.Status != "" {
+				lastStatus = s.Status
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			if s.Status == "completed" {
+			if lastStatus == "completed" {
 				return nil
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("session %s not completed", sessionID)
+	return fmt.Errorf("session %s not completed within %ds (last status: %s)", sessionID, timeoutSec, lastStatus)
 }

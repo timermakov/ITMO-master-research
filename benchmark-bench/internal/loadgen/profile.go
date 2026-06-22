@@ -24,6 +24,17 @@ func (p Profile) InSteady(elapsedSec float64) bool {
 	return elapsedSec < float64(p.RampUpSec+p.SteadySec)
 }
 
+// Phase reports the load-test phase at elapsedSec from test start.
+func (p Profile) Phase(elapsedSec float64) string {
+	if elapsedSec < float64(p.RampUpSec) {
+		return "ramp-up"
+	}
+	if elapsedSec < float64(p.RampUpSec+p.SteadySec) {
+		return "steady"
+	}
+	return "ramp-down"
+}
+
 // TargetRPS returns intended RPS at elapsedSec from test start (linear ramp-up/down).
 func (p Profile) TargetRPS(elapsedSec float64) int {
 	if elapsedSec < 0 {

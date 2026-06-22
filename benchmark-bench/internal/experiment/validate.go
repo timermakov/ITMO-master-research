@@ -9,6 +9,8 @@ import (
 	"github.com/itmo-vkr/dwss/warmkit"
 )
 
+var stateClient = &http.Client{Timeout: 10 * time.Second}
+
 // StateSnapshot is workload + warmkit state from GET /state.
 type StateSnapshot struct {
 	Workload struct {
@@ -21,7 +23,7 @@ type StateSnapshot struct {
 // FetchState reads LoadedService /state.
 func FetchState(warmupURL string) (StateSnapshot, error) {
 	var snap StateSnapshot
-	resp, err := http.Get(warmupURL + "/state")
+	resp, err := stateClient.Get(warmupURL + "/state")
 	if err != nil {
 		return snap, err
 	}

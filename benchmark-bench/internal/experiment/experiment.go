@@ -79,6 +79,7 @@ func RunSDw(ctx context.Context, m profile.Manifest) (Result, error) {
 		}
 		lp := m.LoadProfile()
 		totalSec := m.TotalLoadSec()
+		log.Printf("[s-dw] session %s started; load profile total=%ds ramp=%ds steady=%ds down=%ds", sid, totalSec, lp.RampUpSec, lp.SteadySec, lp.RampDownSec)
 		loadCtx, cancel := context.WithTimeout(runCtx, time.Duration(totalSec+30)*time.Second)
 		defer cancel()
 		errCh := make(chan error, 1)
@@ -86,7 +87,13 @@ func RunSDw(ctx context.Context, m profile.Manifest) (Result, error) {
 			errCh <- loadgen.RunPhased(loadCtx, m.ProxyURL, m.Profile, lp)
 		}()
 		waitErr := coord.WaitSessionCompleted(m.CoordURL, sid, totalSec+60)
+		if waitErr == nil {
+			log.Printf("[s-dw] session %s completed by coordinator", sid)
+		}
 		loadErr := <-errCh
+		if loadErr == nil {
+			log.Printf("[s-dw] loadgen completed for session %s", sid)
+		}
 		if waitErr != nil {
 			return waitErr
 		}
@@ -96,6 +103,7 @@ func RunSDw(ctx context.Context, m profile.Manifest) (Result, error) {
 		if err := cold.WaitReady(m.WarmupURL, 120*time.Second); err != nil {
 			return err
 		}
+		log.Printf("[s-dw] warmup ready for session %s; probing T_first", sid)
 		time.Sleep(500 * time.Millisecond)
 		return nil
 	}, true, "")
