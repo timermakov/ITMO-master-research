@@ -1,4 +1,4 @@
-"""Рис. 2 — разброс T_first по независимым run (filtered box + outliers)."""
+"""Рис. 2 — разброс T_first по независимым повторам после фильтрации."""
 
 from __future__ import annotations
 
@@ -27,13 +27,12 @@ def _split_filtered_runs(row: dict) -> tuple[list[float], list[tuple[int, float]
 def _draw_distribution(
     ax,
     data: list[list[float]],
-    outlier_data: list[list[tuple[int, float]]],
     labels: list[str],
     colors: list[str],
     seed: int,
     *,
     show_legend: bool,
-) -> int:
+) -> None:
     positions = np.arange(1, len(data) + 1)
     bp = ax.boxplot(
         data,
@@ -51,8 +50,7 @@ def _draw_distribution(
         patch.set_alpha(0.55)
 
     rng = np.random.default_rng(seed)
-    total_outliers = 0
-    for i, (vals, outliers, color) in enumerate(zip(data, outlier_data, colors, strict=True), start=1):
+    for i, (vals, color) in enumerate(zip(data, colors, strict=True), start=1):
         jitter = rng.uniform(-0.08, 0.08, size=len(vals))
         ax.scatter(
             i + jitter,
@@ -63,36 +61,11 @@ def _draw_distribution(
             linewidths=0.35,
             alpha=0.9,
             zorder=3,
-            label="run после фильтрации" if show_legend and i == 1 else None,
+            label="измерения после фильтрации" if show_legend and i == 1 else None,
         )
-        if not outliers:
-            continue
-        total_outliers += len(outliers)
-        outlier_jitter = rng.uniform(-0.08, 0.08, size=len(outliers))
-        outlier_values = [value for _, value in outliers]
-        ax.scatter(
-            i + outlier_jitter,
-            outlier_values,
-            s=28,
-            marker="x",
-            color="black",
-            linewidths=0.8,
-            zorder=4,
-            label="выбросы IQR" if show_legend and total_outliers == len(outliers) else None,
-        )
-        for x, (run_index, value) in zip(i + outlier_jitter, outliers, strict=True):
-            ax.annotate(
-                f"#{run_index}",
-                (x, value),
-                xytext=(3, 3),
-                textcoords="offset points",
-                fontsize=6,
-                color="black",
-            )
 
     ax.set_xticks(positions)
     ax.set_xticklabels(labels)
-    return total_outliers
 
 
 def plot(out_dir: Path, full_path: Path | None = None) -> None:
@@ -121,10 +94,9 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
         width_ratios=[1.25, 1.0],
         constrained_layout=True,
     )
-    total_outliers = _draw_distribution(
+    _draw_distribution(
         ax_all,
         filtered_data,
-        outlier_data,
         labels,
         colors,
         manifest["seed"],
@@ -132,18 +104,15 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
     )
     ax_all.set_yscale("log")
     ax_all.set_ylabel(r"$T_{\mathrm{first}}$, мкс")
-    ax_all.set_title("Все сценарии (лог. шкала)")
-    if total_outliers > 0:
-        ax_all.legend(loc="upper right")
+    ax_all.set_title("Все сценарии (логарифмическая шкала)")
+    ax_all.legend(loc="upper right")
 
     warm_data = filtered_data[1:]
-    warm_outliers = outlier_data[1:]
     warm_labels = labels[1:]
     warm_colors = colors[1:]
     _draw_distribution(
         ax_zoom,
         warm_data,
-        warm_outliers,
         warm_labels,
         warm_colors,
         manifest["seed"] + 1,
@@ -158,8 +127,8 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
         out_dir,
         stem,
         f"Рисунок 2 — Распределение $T_{{\\mathrm{{first}}}}$ по {manifest['runs']} "
-        f"независимым run для каждого сценария. Левая панель показывает весь диапазон "
+        f"независимым повторам для каждого сценария. Левая панель показывает весь диапазон "
         f"на логарифмической шкале, правая — увеличенный вид прогретых сценариев. "
-        f"Ящик, усы и цветные точки построены по run после IQR-фильтрации (1,5×IQR), "
-        f"как в сводной статистике; чёрные кресты — исключённые выбросы с номером run.",
+        f"Ящик, усы и цветные точки построены только по значениям после IQR-фильтрации "
+        f"(1,5×IQR), как в сводной статистике; исключённые выбросы на графике не показаны.",
     )

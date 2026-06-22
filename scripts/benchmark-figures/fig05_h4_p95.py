@@ -1,4 +1,4 @@
-"""Рис. 5 — H4: p95 E2E latency (block-medians, steady phase)."""
+"""Рис. 5 — H4: влияние зеркалирования на задержку ответа."""
 
 from __future__ import annotations
 
@@ -14,18 +14,13 @@ def _h4_metric(row: dict) -> tuple[float, float, float, str]:
     summary = summary_us(row["summary"])
     runs = row.get("runs") or []
     if len(runs) >= 5:
-        return summary["p50"], summary["p50_lo"], summary["p50_hi"], "медиана run-level P95"
-    return summary["p95"], summary["p95"], summary["p95"], "P95 1-секундных блоков"
-
-
-def _verdict(value: str) -> str:
-    return "пройдено" if value == "pass" else "не пройдено" if value == "fail" else value
+        return summary["p50"], summary["p50_lo"], summary["p50_hi"], "медиана P95 по повторам"
+    return summary["p95"], summary["p95"], summary["p95"], "P95 медиан по 1-секундным окнам"
 
 
 def plot(out_dir: Path, h4_path: Path | None = None) -> None:
     apply_thesis_style()
     payload = load_h4_results(h4_path)
-    hypo = payload.get("hypotheses", {}).get("H4", "?")
 
     off_row = next(r for r in payload["results"] if r["scenario"] == "h4-mirror-off")
     on_row = next(r for r in payload["results"] if r["scenario"] == "h4-mirror-on")
@@ -45,12 +40,12 @@ def plot(out_dir: Path, h4_path: Path | None = None) -> None:
     if any(err_hi):
         ax.errorbar(x, values, yerr=[err_lo, err_hi], fmt="none", ecolor="black", capsize=4, zorder=4)
     ax.axhline(bound, color=COLORS["threshold"], linestyle="--", linewidth=1.0,
-               label=r"допустимый порог: базовый уровень $\times 1{,}05$")
+               label="допустимый порог: +5%")
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    ax.set_ylabel("E2E задержка, мкс")
-    ax.set_title("Влияние зеркалирования на активный путь")
+    ax.set_ylabel("Задержка ответа, мкс")
+    ax.set_title("Влияние зеркалирования на задержку ответа")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12))
 
     for i, val in enumerate(values):
@@ -61,7 +56,7 @@ def plot(out_dir: Path, h4_path: Path | None = None) -> None:
     ax.text(
         0.5,
         -0.22,
-        f"H4: {_verdict(hypo)}; накладные расходы {delta_us:+.0f} мкс ({overhead_pct:+.1f}%)",
+        f"Накладные расходы {delta_us:+.0f} мкс ({overhead_pct:+.1f}%)",
         transform=ax.transAxes,
         ha="center",
         va="top",
@@ -73,8 +68,8 @@ def plot(out_dir: Path, h4_path: Path | None = None) -> None:
     write_caption(
         out_dir,
         stem,
-        "Рисунок 5 — Влияние зеркалирования на end-to-end задержку GET /work через "
+        "Рисунок 5 — Влияние зеркалирования на полную задержку ответа GET /work через "
         f"mirror-proxy: без зеркалирования {off_val:.0f} мкс, с зеркалированием {on_val:.0f} мкс. "
         f"Абсолютная разница {delta_us:+.0f} мкс, относительные накладные расходы {overhead_pct:+.1f}\\%. "
-        f"Пунктир — граница H4 (+5\\%). Метрика: {metric_label} steady-фазы.",
+        f"Пунктир — допустимое увеличение на 5\\%. Метрика: {metric_label} стабильной фазы.",
     )

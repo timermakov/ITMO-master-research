@@ -1,18 +1,18 @@
 {
-  "generatedAt": "2026-06-22T00:18:44.300929+00:00",
+  "generatedAt": "2026-06-22T18:14:05.481271+00:00",
   "fullResults": "/Users/pc/Documents/Study/Master/VKR/Projects/results/full/results.json",
   "h4Results": "/Users/pc/Documents/Study/Master/VKR/Projects/results/h4/results.json",
   "sources": {
     "full": {
       "path": "/Users/pc/Documents/Study/Master/VKR/Projects/results/full/results.json",
-      "sha256": "89eb4d49a5ac648206a3e3cf9b6843c2f324205ae8388868333b11a8f2cbdc0f",
+      "sha256": "6673cd38cf12a25665f17315a8b746c39603289fda76a0a4e21d41e150176a98",
       "protocolVersion": "2",
-      "gitCommit": "71623ee",
-      "startedAt": "2026-06-18T18:19:15.3373282Z",
+      "gitCommit": "2f60c04",
+      "startedAt": "2026-06-22T17:49:06.804536Z",
       "hypotheses": {
         "H1": "pass",
-        "H2": "pass",
-        "H2_CI": "pass",
+        "H2": "fail",
+        "H2_CI": "fail",
         "H3": "pass"
       }
     },

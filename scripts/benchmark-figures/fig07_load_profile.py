@@ -48,7 +48,7 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
     ax.set_title("Профиль нагрузки бенчмарка")
     ax.set_xlim(0, total)
     ax.set_ylim(0, max_rps * 1.08)
-    ax.legend(loc="upper right", ncol=3, fontsize=10)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.28), ncol=3, fontsize=8)
 
     stem = "fig07_load_profile"
     save_figure(fig, out_dir, stem)
