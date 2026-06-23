@@ -88,8 +88,6 @@ bench-s-dw:
 bench-overhead:
 	cd benchmark-bench && go run ./cmd/bench run --scenarios overhead --out ../results/overhead
 
-bench-h4: bench-overhead
-
 bench-all:
 	cd benchmark-bench && go run ./cmd/bench run --scenarios all --out ../results/full
 
