@@ -10,7 +10,9 @@ NS_TO_US = 1e-3
 NS_TO_MS = 1e-6
 
 SCENARIO_ORDER = ("s0-control", "s-ref", "s-dw")
-H4_ORDER = ("h4-mirror-off", "h4-mirror-on")
+OVERHEAD_ORDER = ("overhead-mirror-off", "overhead-mirror-on")
+# Legacy ids from older benchmark runs.
+OVERHEAD_ORDER_LEGACY = ("h4-mirror-off", "h4-mirror-on")
 
 
 def project_root() -> Path:
@@ -36,11 +38,19 @@ def load_full_results(path: Path | None = None) -> dict[str, Any]:
     return load_json(p)
 
 
-def load_h4_results(path: Path | None = None) -> dict[str, Any]:
-    p = path or project_root() / "results" / "h4" / "results.json"
+def load_overhead_results(path: Path | None = None) -> dict[str, Any]:
+    p = path or project_root() / "results" / "overhead" / "results.json"
     if not p.is_file():
-        raise FileNotFoundError(f"Не найден файл H4: {p}")
+        legacy = project_root() / "results" / "h4" / "results.json"
+        if legacy.is_file():
+            p = legacy
+    if not p.is_file():
+        raise FileNotFoundError(f"Не найден файл overhead: {p}")
     return load_json(p)
+
+
+def load_h4_results(path: Path | None = None) -> dict[str, Any]:
+    return load_overhead_results(path)
 
 
 def us(values_ns: list[float]) -> list[float]:

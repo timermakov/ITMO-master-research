@@ -56,10 +56,16 @@ def main() -> int:
         help="Путь к results/full/results.json",
     )
     parser.add_argument(
+        "--overhead",
+        type=Path,
+        default=None,
+        help="Путь к results/overhead/results.json",
+    )
+    parser.add_argument(
         "--h4",
         type=Path,
         default=None,
-        help="Путь к results/h4/results.json",
+        help="Устаревший alias для --overhead",
     )
     parser.add_argument(
         "--out",
@@ -73,7 +79,11 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     full_path = args.full or project_root() / "results" / "full" / "results.json"
-    h4_path = args.h4 or project_root() / "results" / "h4" / "results.json"
+    overhead_path = args.overhead or args.h4 or project_root() / "results" / "overhead" / "results.json"
+    if not overhead_path.is_file():
+        legacy_h4 = project_root() / "results" / "h4" / "results.json"
+        if legacy_h4.is_file():
+            overhead_path = legacy_h4
 
     if not full_path.is_file():
         print(f"ERROR: не найден {full_path}", file=sys.stderr)
@@ -93,22 +103,22 @@ def main() -> int:
     f04.plot(out_dir, full_path)
     f07.plot(out_dir, full_path)
 
-    if h4_path.is_file():
-        print(f"Источник H4: {h4_path}")
-        f05.plot(out_dir, h4_path)
-        f06.plot(out_dir, h4_path)
+    if overhead_path.is_file():
+        print(f"Источник overhead: {overhead_path}")
+        f05.plot(out_dir, overhead_path)
+        f06.plot(out_dir, overhead_path)
         figures.extend(["fig05_h4_p95", "fig06_h4_blocks_timeseries"])
     else:
-        print(f"WARN: H4 пропущен — нет {h4_path}", file=sys.stderr)
+        print(f"WARN: overhead пропущен — нет {overhead_path}", file=sys.stderr)
     figures.append("fig07_load_profile")
 
     manifest = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "fullResults": str(full_path.resolve()),
-        "h4Results": str(h4_path.resolve()) if h4_path.is_file() else None,
+        "overheadResults": str(overhead_path.resolve()) if overhead_path.is_file() else None,
         "sources": {
             "full": source_meta(full_path),
-            "h4": source_meta(h4_path) if h4_path.is_file() else None,
+            "overhead": source_meta(overhead_path) if overhead_path.is_file() else None,
         },
         "figures": figures,
     }

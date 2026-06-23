@@ -9,7 +9,6 @@ import (
 
 	"github.com/itmo-vkr/dwss/LoadedService/internal/config"
 	"github.com/itmo-vkr/dwss/LoadedService/internal/httpserver"
-	"github.com/itmo-vkr/dwss/LoadedService/internal/mmapstore"
 	"github.com/itmo-vkr/dwss/LoadedService/internal/workload"
 	"github.com/itmo-vkr/dwss/internal/pprofserver"
 	"github.com/itmo-vkr/dwss/warmkit"
@@ -24,19 +23,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	sizeBytes := int64(cfg.MmapSizeMB) * 1024 * 1024
-	store := mmapstore.New(cfg.MmapFile, sizeBytes)
-	if err := store.EnsureFile(); err != nil {
-		logger.Error("ensure file", slog.String("err", err.Error()))
-		os.Exit(1)
-	}
-	if err := store.Map(); err != nil {
-		logger.Error("map file", slog.String("err", err.Error()))
-		os.Exit(1)
-	}
-	defer func() { _ = store.Unmap() }()
-
-	work := workload.New(store, cfg.IndexKeys)
+	work := workload.New(cfg.IndexKeys)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

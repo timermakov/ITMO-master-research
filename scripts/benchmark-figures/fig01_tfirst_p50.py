@@ -65,7 +65,7 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
     ax_all.set_xticks(x)
     ax_all.set_xticklabels(labels)
     ax_all.set_ylabel(r"$T_{\mathrm{first}}$, P50, мкс")
-    ax_all.set_title("Задержка первого запроса после запуска")
+    ax_all.set_title("Задержка построения hashmap при первом запросе")
 
     for bar, val in zip(bars, p50, strict=True):
         ax_all.text(
@@ -131,7 +131,8 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
     write_caption(
         out_dir,
         stem,
-        f"Рисунок 1 — Медиана (P50) первичной метрики $T_{{\\mathrm{{first}}}}$ "
+        f"Рисунок 1 — Медиана (P50) метрики $T_{{\\mathrm{{first}}}}$: время построения "
+        f"in-memory hashmap и lookup при первом GET /work после reset "
         f"для трёх сценариев: без прогрева, ручной прогрев и динамический прогрев СДПС "
         f"(N={manifest['runs']}, seed={manifest['seed']}, samples={manifest['samples']}). "
         f"Столбцы — P50; вертикальные отрезки — 95\\% доверительный интервал для P50. "

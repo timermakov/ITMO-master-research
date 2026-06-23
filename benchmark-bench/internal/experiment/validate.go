@@ -14,8 +14,7 @@ var stateClient = &http.Client{Timeout: 10 * time.Second}
 // StateSnapshot is workload + warmkit state from GET /state.
 type StateSnapshot struct {
 	Workload struct {
-		MmapCold bool `json:"mmapCold"`
-		AppCold  bool `json:"appCold"`
+		IndexCold bool `json:"indexCold"`
 	} `json:"workload"`
 	Warmkit warmkit.MetricsSnapshot `json:"warmkit"`
 }
@@ -39,12 +38,12 @@ func FetchState(warmupURL string) (StateSnapshot, error) {
 	return snap, nil
 }
 
-// WaitWarmWorkload polls until mmap and app caches are warm.
+// WaitWarmWorkload polls until the in-memory index is built.
 func WaitWarmWorkload(warmupURL string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		snap, err := FetchState(warmupURL)
-		if err == nil && !snap.Workload.MmapCold && !snap.Workload.AppCold {
+		if err == nil && !snap.Workload.IndexCold {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -56,11 +55,11 @@ func WaitWarmWorkload(warmupURL string, timeout time.Duration) error {
 func ValidPreProbe(scenario string, snap StateSnapshot, readyOK bool) bool {
 	switch scenario {
 	case "s0-control":
-		return snap.Workload.MmapCold || snap.Workload.AppCold
+		return snap.Workload.IndexCold
 	case "s-ref":
-		return !snap.Workload.MmapCold && !snap.Workload.AppCold
+		return !snap.Workload.IndexCold
 	case "s-dw":
-		return readyOK && !snap.Workload.MmapCold && !snap.Workload.AppCold
+		return readyOK && !snap.Workload.IndexCold
 	default:
 		return true
 	}

@@ -68,13 +68,13 @@ func WriteMarkdown(outDir string, manifest profile.Manifest, results []experimen
 	}
 	if len(extra) > 0 {
 		sb.WriteString("\n## Hypotheses\n\n")
-		for _, key := range []string{"H1", "H2", "H2_CI", "H3", "H4"} {
+		for _, key := range []string{"H1", "H2", "H2_CI", "H3", "overhead"} {
 			if v, ok := extra[key]; ok {
 				fmt.Fprintf(&sb, "- **%s**: %s\n", key, v)
 			}
 		}
 		for k, v := range extra {
-			if k == "H1" || k == "H2" || k == "H2_CI" || k == "H3" || k == "H4" {
+			if k == "H1" || k == "H2" || k == "H2_CI" || k == "H3" || k == "overhead" || k == "H4" {
 				continue
 			}
 			fmt.Fprintf(&sb, "- **%s**: %s\n", k, v)
@@ -114,7 +114,7 @@ func writeMetadata(sb *strings.Builder, manifest profile.Manifest) {
 	}
 	fmt.Fprintf(sb, "- CV thresholds: global %.2f%%, cold %.2f%%, manual %.2f%%, dynamic %.2f%%\n",
 		manifest.CVThreshold, manifest.CVThresholdS0, manifest.CVThresholdSRef, manifest.CVThresholdSDw)
-	fmt.Fprintf(sb, "- H4 runs: target `%d`, max `%d`; readyAfter actual `%d`\n\n",
+	fmt.Fprintf(sb, "- Overhead runs: target `%d`, max `%d`; readyAfter actual `%d`\n\n",
 		manifest.H4Runs, manifest.H4MaxRuns, manifest.ReadyAfterActual)
 }
 
@@ -128,7 +128,7 @@ func resultName(r experiment.Result) string {
 
 func expectedRuns(manifest profile.Manifest, r experiment.Result) int {
 	switch r.Scenario {
-	case "h4-mirror-off", "h4-mirror-on":
+	case "overhead-mirror-off", "overhead-mirror-on", "h4-mirror-off", "h4-mirror-on":
 		return manifest.H4Runs
 	default:
 		return manifest.Runs

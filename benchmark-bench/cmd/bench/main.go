@@ -17,7 +17,7 @@ import (
 func main() {
 	runtime.GOMAXPROCS(1)
 	if len(os.Args) < 2 {
-		log.Fatal("usage: bench run <scenario> | bench report --in <dir>")
+		log.Fatal("usage: bench run [--scenarios LIST] | bench run <scenario> | bench report --in <dir>")
 	}
 	switch os.Args[1] {
 	case "run":
@@ -30,27 +30,26 @@ func main() {
 }
 
 func runCmd(args []string) {
-	var scenario string
-	flagArgs := make([]string, 0, len(args))
-	for _, a := range args {
-		if scenario == "" && !strings.HasPrefix(a, "-") {
-			scenario = a
-			continue
-		}
-		flagArgs = append(flagArgs, a)
-	}
-	if scenario == "" {
-		log.Fatal("scenario required")
-	}
-
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	scenariosFlag := fs.String("scenarios", "", "comma-separated scenarios: s0-control,s-ref,s-dw,overhead,all")
 	out := fs.String("out", "results", "output directory")
 	target := fs.String("target-instance", "", "override warmup instance id")
 	active := fs.String("active-instance", "", "override active instance id")
 	ready := fs.Int("ready-after", 0, "override ready-after shadow count")
-	if err := fs.Parse(flagArgs); err != nil {
+	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
+
+	positional := ""
+	if fs.NArg() > 0 {
+		positional = fs.Arg(0)
+	}
+
+	selected, err := resolveScenarios(*scenariosFlag, positional)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	m, err := profile.LoadFromEnv()
 	if err != nil {
 		log.Fatal(err)
@@ -61,53 +60,9 @@ func runCmd(args []string) {
 	}
 
 	ctx := context.Background()
-	var results []experiment.Result
-	var hypo map[string]string
-
-	switch scenario {
-	case "s0-control":
-		res, err := experiment.RunS0Control(m)
-		if err != nil {
-			log.Fatal(err)
-		}
-		results = []experiment.Result{res}
-	case "s-ref":
-		res, err := experiment.RunSRef(m)
-		if err != nil {
-			log.Fatal(err)
-		}
-		results = []experiment.Result{res}
-	case "s-dw":
-		res, err := experiment.RunSDw(ctx, m)
-		if err != nil {
-			log.Fatal(err)
-		}
-		results = []experiment.Result{res}
-	case "h4-overhead":
-		results, err = experiment.RunH4Overhead(ctx, m)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if len(results) == 2 {
-			hypo = map[string]string{"H4": experiment.EvaluateH4(results[0], results[1])}
-		}
-	case "all":
-		s0, err := experiment.RunS0Control(m)
-		if err != nil {
-			log.Fatal(err)
-		}
-		sRef, err := experiment.RunSRef(m)
-		if err != nil {
-			log.Fatal(err)
-		}
-		sDw, err := experiment.RunSDw(ctx, m)
-		if err != nil {
-			log.Fatal(err)
-		}
-		results = []experiment.Result{s0, sRef, sDw}
-		hypo = experiment.EvaluateHypotheses(s0, sRef, sDw)
-	default:
-		log.Fatalf("unknown scenario %s", scenario)
+	results, hypo, err := runScenarios(ctx, m, selected)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	if err := report.WriteJSON(*out, m, results, hypo); err != nil {
@@ -124,6 +79,97 @@ func runCmd(args []string) {
 	fmt.Println("wrote results to", *out)
 }
 
+func resolveScenarios(flagValue, positional string) ([]string, error) {
+	raw := strings.TrimSpace(flagValue)
+	if raw == "" {
+		raw = strings.TrimSpace(positional)
+	}
+	if raw == "" {
+		return nil, fmt.Errorf("scenario required: use --scenarios or positional argument")
+	}
+	if raw == "all" {
+		return []string{"s0-control", "s-ref", "s-dw"}, nil
+	}
+
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		name := normalizeScenario(strings.TrimSpace(part))
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no scenarios selected")
+	}
+	return out, nil
+}
+
+func normalizeScenario(name string) string {
+	switch name {
+	case "h4-overhead":
+		return "overhead"
+	default:
+		return name
+	}
+}
+
+func runScenarios(ctx context.Context, m profile.Manifest, names []string) ([]experiment.Result, map[string]string, error) {
+	var results []experiment.Result
+	hypo := map[string]string{}
+
+	var s0, sRef, sDw experiment.Result
+	ranS0, ranSRef, ranSDw := false, false, false
+
+	for _, name := range names {
+		switch name {
+		case "s0-control":
+			res, err := experiment.RunS0Control(m)
+			if err != nil {
+				return nil, nil, err
+			}
+			s0 = res
+			results = append(results, res)
+			ranS0 = true
+		case "s-ref":
+			res, err := experiment.RunSRef(m)
+			if err != nil {
+				return nil, nil, err
+			}
+			sRef = res
+			results = append(results, res)
+			ranSRef = true
+		case "s-dw":
+			res, err := experiment.RunSDw(ctx, m)
+			if err != nil {
+				return nil, nil, err
+			}
+			sDw = res
+			results = append(results, res)
+			ranSDw = true
+		case "overhead":
+			oh, err := experiment.RunOverhead(ctx, m)
+			if err != nil {
+				return nil, nil, err
+			}
+			results = append(results, oh...)
+			if len(oh) == 2 {
+				hypo["overhead"] = experiment.EvaluateOverhead(oh[0], oh[1])
+			}
+		default:
+			return nil, nil, fmt.Errorf("unknown scenario %s", name)
+		}
+	}
+
+	if ranS0 && ranSRef && ranSDw {
+		for k, v := range experiment.EvaluateHypotheses(s0, sRef, sDw) {
+			hypo[k] = v
+		}
+	}
+	return results, hypo, nil
+}
+
 func reportCmd(args []string) {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	in := fs.String("in", "results", "input directory")
@@ -138,7 +184,7 @@ func reportCmd(args []string) {
 	}
 	if len(payload.Hypotheses) > 0 {
 		fmt.Println("hypotheses:")
-		for _, key := range []string{"H1", "H2", "H2_CI", "H3", "H4"} {
+		for _, key := range []string{"H1", "H2", "H2_CI", "H3", "overhead", "H4"} {
 			if value, found := payload.Hypotheses[key]; found {
 				fmt.Printf("- %s: %s\n", key, value)
 			}

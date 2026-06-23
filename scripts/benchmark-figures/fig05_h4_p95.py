@@ -1,4 +1,4 @@
-"""Рис. 5 — H4: влияние зеркалирования на задержку ответа."""
+"""Рис. 5 — накладные расходы зеркалирования: влияние на задержку ответа."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ from pathlib import Path
 
 import numpy as np
 
-from common.data import load_h4_results, summary_us
+from common.data import OVERHEAD_ORDER, OVERHEAD_ORDER_LEGACY, load_overhead_results, summary_us
 from common.style import COLORS, SCENARIO_LABELS, apply_thesis_style, new_figure, save_figure, write_caption
 
 
-def _h4_metric(row: dict) -> tuple[float, float, float, str]:
+def _overhead_metric(row: dict) -> tuple[float, float, float, str]:
     summary = summary_us(row["summary"])
     runs = row.get("runs") or []
     if len(runs) >= 5:
@@ -18,17 +18,32 @@ def _h4_metric(row: dict) -> tuple[float, float, float, str]:
     return summary["p95"], summary["p95"], summary["p95"], "P95 медиан по 1-секундным окнам"
 
 
-def plot(out_dir: Path, h4_path: Path | None = None) -> None:
+def plot(out_dir: Path, overhead_path: Path | None = None) -> None:
     apply_thesis_style()
-    payload = load_h4_results(h4_path)
+    payload = load_overhead_results(overhead_path)
 
-    off_row = next(r for r in payload["results"] if r["scenario"] == "h4-mirror-off")
-    on_row = next(r for r in payload["results"] if r["scenario"] == "h4-mirror-on")
-    off_val, off_lo, off_hi, metric_label = _h4_metric(off_row)
-    on_val, on_lo, on_hi, _ = _h4_metric(on_row)
+    def find_row(scenario: str) -> dict:
+        for row in payload["results"]:
+            if row["scenario"] == scenario:
+                return row
+        raise StopIteration(scenario)
+
+    off_name = OVERHEAD_ORDER[0]
+    on_name = OVERHEAD_ORDER[1]
+    try:
+        off_row = find_row(off_name)
+        on_row = find_row(on_name)
+    except StopIteration:
+        off_name = OVERHEAD_ORDER_LEGACY[0]
+        on_name = OVERHEAD_ORDER_LEGACY[1]
+        off_row = find_row(off_name)
+        on_row = find_row(on_name)
+
+    off_val, off_lo, off_hi, metric_label = _overhead_metric(off_row)
+    on_val, on_lo, on_hi, _ = _overhead_metric(on_row)
     bound = off_val * 1.05
 
-    labels = [SCENARIO_LABELS["h4-mirror-off"], SCENARIO_LABELS["h4-mirror-on"]]
+    labels = [SCENARIO_LABELS[off_name], SCENARIO_LABELS[on_name]]
     values = [off_val, on_val]
     err_lo = [off_val - off_lo, on_val - on_lo]
     err_hi = [off_hi - off_val, on_hi - on_val]

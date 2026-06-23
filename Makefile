@@ -1,4 +1,4 @@
-.PHONY: test vet lint build tidy profile-cpu profile-flame profile-heap load compose-up compose-down bench-s0 bench-s-ref bench-s-dw bench-h4 bench-all figures
+.PHONY: test vet lint build tidy profile-cpu profile-flame profile-heap load compose-up compose-down bench-s0 bench-s-ref bench-s-dw bench-overhead bench-h4 bench-all figures
 
 ifneq (,$(wildcard .env.local))
 include .env.local
@@ -85,11 +85,13 @@ bench-s-ref:
 bench-s-dw:
 	cd benchmark-bench && go run ./cmd/bench run s-dw --out ../results/s-dw
 
-bench-h4:
-	cd benchmark-bench && go run ./cmd/bench run h4-overhead --out ../results/h4
+bench-overhead:
+	cd benchmark-bench && go run ./cmd/bench run --scenarios overhead --out ../results/overhead
+
+bench-h4: bench-overhead
 
 bench-all:
-	cd benchmark-bench && go run ./cmd/bench run all --out ../results/full
+	cd benchmark-bench && go run ./cmd/bench run --scenarios all --out ../results/full
 
 figures:
 	python -m pip install -q -r scripts/benchmark-figures/requirements.txt

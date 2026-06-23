@@ -109,19 +109,19 @@ func RunSDw(ctx context.Context, m profile.Manifest) (Result, error) {
 	}, true, "")
 }
 
-// RunH4Overhead compares E2E p95 through proxy with mirror off vs on.
-func RunH4Overhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
+// RunOverhead compares response latency through proxy with mirror off vs on.
+func RunOverhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
 	out := make([]Result, 0, 2)
 	phases := []struct {
 		name    string
 		enabled bool
 		ratio   float64
 	}{
-		{"h4-mirror-off", false, 0},
-		{"h4-mirror-on", true, 1.0},
+		{"overhead-mirror-off", false, 0},
+		{"overhead-mirror-on", true, 1.0},
 	}
 	for _, ph := range phases {
-		res, err := runH4Phase(ctx, m, ph.name, ph.enabled, ph.ratio)
+		res, err := runOverheadPhase(ctx, m, ph.name, ph.enabled, ph.ratio)
 		if err != nil {
 			return nil, err
 		}
@@ -131,7 +131,12 @@ func RunH4Overhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
 	return out, nil
 }
 
-func runH4Phase(ctx context.Context, m profile.Manifest, name string, enabled bool, ratio float64) (Result, error) {
+// RunH4Overhead is deprecated; use RunOverhead.
+func RunH4Overhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
+	return RunOverhead(ctx, m)
+}
+
+func runOverheadPhase(ctx context.Context, m profile.Manifest, name string, enabled bool, ratio float64) (Result, error) {
 	cfg := warmkit.MirrorConfig{
 		Enabled:          enabled,
 		Ratio:            ratio,
@@ -159,7 +164,7 @@ func runH4Phase(ctx context.Context, m profile.Manifest, name string, enabled bo
 		}
 		blocks := loadgen.BlockMedians(rttRes.Steady, m.RPS)
 		if len(blocks) == 0 {
-			return Result{}, fmt.Errorf("[%s] no H4 steady blocks", name)
+			return Result{}, fmt.Errorf("[%s] no overhead steady blocks", name)
 		}
 		blockSum := stats.SummarizeFilteredWithSeed(blocks, blocks, nil, m.Seed)
 		runP95 := blockSum.P95
@@ -176,14 +181,14 @@ func runH4Phase(ctx context.Context, m profile.Manifest, name string, enabled bo
 		})
 
 		if len(records) >= m.H4Runs {
-			res := buildH4Result(name, records, runP95Values, allRTTValues, allBlockValues, m)
+			res := buildOverheadResult(name, records, runP95Values, allRTTValues, allBlockValues, m)
 			if res.CVPass || len(records) >= m.H4MaxRuns || !m.ProfileOnHighCV {
 				return res, nil
 			}
-			log.Printf("[%s] H4 CV fail (%s), collecting up to %d runs", name, res.CVPassReason, m.H4MaxRuns)
+			log.Printf("[%s] overhead CV fail (%s), collecting up to %d runs", name, res.CVPassReason, m.H4MaxRuns)
 		}
 	}
-	return buildH4Result(name, records, runP95Values, allRTTValues, allBlockValues, m), nil
+	return buildOverheadResult(name, records, runP95Values, allRTTValues, allBlockValues, m), nil
 }
 
 func runIndependent(m profile.Manifest, name string, warmup func(context.Context) error, trackReady bool, _ string) (Result, error) {
@@ -216,8 +221,8 @@ func runIndependent(m profile.Manifest, name string, warmup func(context.Context
 			continue
 		}
 		if !ValidPreProbe(name, snap, readyOK) {
-			log.Printf("[%s] attempt %d: invalid pre-probe state (readyOk=%v mmapCold=%v appCold=%v)",
-				name, attempt, readyOK, snap.Workload.MmapCold, snap.Workload.AppCold)
+			log.Printf("[%s] attempt %d: invalid pre-probe state (readyOk=%v indexCold=%v)",
+				name, attempt, readyOK, snap.Workload.IndexCold)
 			continue
 		}
 		s, err := probe.TFirst(m.WarmupURL, m.Profile)
@@ -276,15 +281,13 @@ func buildResult(name string, records []RunRecord, values, e2e []float64, m prof
 	}
 }
 
-func buildH4Result(name string, records []RunRecord, runP95Values, allRTTValues, allBlockValues []float64, m profile.Manifest) Result {
+func buildOverheadResult(name string, records []RunRecord, runP95Values, allRTTValues, allBlockValues []float64, m profile.Manifest) Result {
 	filtered, outliers := stats.FilterIQRIndexed(runP95Values)
 	sum := stats.SummarizeFilteredWithSeed(runP95Values, filtered, outliers, m.Seed)
 	blockFiltered, blockOutliers := stats.FilterIQRIndexed(allBlockValues)
 	blockSum := stats.SummarizeFilteredWithSeed(allBlockValues, blockFiltered, blockOutliers, m.Seed)
 	values := runP95Values
 	if len(records) < 5 {
-		// Diagnostic H4 runs do not have enough run-level samples for CV/CI, so
-		// keep the legacy block-level statistic while still preserving runs[].
 		sum = blockSum
 		values = allBlockValues
 	}
@@ -302,22 +305,26 @@ func buildH4Result(name string, records []RunRecord, runP95Values, allRTTValues,
 		Runs:         records,
 		CVPass:       cv.Pass,
 		CVPassReason: cv.Reason,
-		Hypothesis:   "H4: run-level p95 mirror-on vs mirror-off on proxy /work E2E",
+		Hypothesis:   "overhead: run-level p95 mirror-on vs mirror-off on proxy /work",
 	}
 }
 
 func ScenarioInfo(name string) (string, string) {
 	switch name {
 	case "s0-control":
-		return "Без прогрева", "Холодный warmup-инстанс сразу получает первый боевой GET /work."
+		return "Без прогрева", "Холодный инстанс: первый GET /work строит in-memory hashmap."
 	case "s-ref":
-		return "Ручной прогрев", "Перед первым боевым GET /work выполняется эталонный POST /warmup с тем же WorkloadProfile."
+		return "Ручной прогрев", "Перед первым боевым GET /work выполняется POST /warmup с тем же профилем."
 	case "s-dw":
-		return "Динамический прогрев", "Новый инстанс прогревается зеркалированным GET-трафиком через СДПС и переводится в ready."
+		return "Динамический прогрев", "Инстанс прогревается зеркалированным GET-трафиком через СДПС."
+	case "overhead-mirror-off":
+		return "Зеркалирование выключено", "Базовая задержка ответа через mirror-proxy."
+	case "overhead-mirror-on":
+		return "Зеркалирование включено", "Задержка ответа при асинхронном mirror-трафике на warmup."
 	case "h4-mirror-off":
-		return "Зеркалирование выключено", "Базовая E2E задержка active path через mirror-proxy."
+		return ScenarioInfo("overhead-mirror-off")
 	case "h4-mirror-on":
-		return "Зеркалирование включено", "E2E задержка active path при асинхронном mirror-трафике на warmup."
+		return ScenarioInfo("overhead-mirror-on")
 	default:
 		return name, ""
 	}
@@ -340,19 +347,28 @@ func intsToFloats(in []int64) []float64 {
 	return out
 }
 
-// EvaluateH4 compares mirror-on vs mirror-off p95 E2E on proxy /work (block medians).
-func EvaluateH4(off, on Result) string {
-	if h4Observed(on) <= h4Observed(off)*1.05 {
+// EvaluateOverhead compares mirror-on vs mirror-off p95 on proxy /work.
+func EvaluateOverhead(off, on Result) string {
+	if overheadObserved(on) <= overheadObserved(off)*1.05 {
 		return "pass"
 	}
 	return "fail"
 }
 
-func h4Observed(r Result) float64 {
+// EvaluateH4 is deprecated; use EvaluateOverhead.
+func EvaluateH4(off, on Result) string {
+	return EvaluateOverhead(off, on)
+}
+
+func overheadObserved(r Result) float64 {
 	if len(r.Runs) > 0 {
 		return r.Summary.P50
 	}
 	return r.Summary.P95
+}
+
+func h4Observed(r Result) float64 {
+	return overheadObserved(r)
 }
 
 // EvaluateHypotheses compares scenario medians for H1/H2/H3 notes.
