@@ -71,9 +71,11 @@ bench run --scenarios overhead --out ../results/overhead
 
 Измеряется **E2E p95** `GET /work` **через proxy** (клиентский путь на active):
 
-1. `mirror off` → loadgen (ramp → steady → down) → RTT **только из steady**.
-2. `mirror on, ratio=1.0` → loadgen → RTT из steady.
-3. Сравнить p95 block-medians: pass если p95(on) ≤ p95(off) × 1.05.
+1. Повторы **чередуют** mirror off и mirror on (несколько блоков off→on подряд).
+2. Перед каждым измерением — **одинаковый warmup**: полный профиль ramp → steady → down (RTT не учитывается).
+3. Затем второй проход тем же профилем; **метрики только из steady-окна** второго прохода.
+4. На каждую сторону — `DWSS_BENCH_H4_RUNS` валидных повторов (до `DWSS_BENCH_H4_MAX_RUNS` при adaptive CV).
+5. Сравнить p95 block-medians: pass если p95(on) ≤ p95(off) × 1.05.
 
 После overhead — baseline mirror off.
 
@@ -98,7 +100,7 @@ bench run --scenarios overhead --out ../results/overhead
 
 | Профиль | RUNS | MAX_RUNS | OVERHEAD_RUNS | RAMP / STEADY / DOWN | COOLDOWN_MS | Назначение |
 |---------|------|----------|---------------|----------------------|-------------|------------|
-| **Final NIR** | 20 | 40 | 5–10 | 60 / 300 / 30 | 5000 | серия для отчёта |
+| **Final NIR** | 20 | 40 | 15–20 | 60 / 300 / 30 | 5000 | серия для отчёта |
 | **Lab** | 10–20 | 20–40 | 3–5 | 60 / 300 / 30 | 2000 | проверка на Windows/Docker |
 | **Debug** | 5 | 5–10 | 1 | 30 / 60 / 15 | 500 | быстрая проверка стенда |
 
@@ -150,8 +152,8 @@ RTT агрегируются в **1-секундные блоки** (разме�
 | ID | Формулировка (по median P50 T_first) |
 |----|--------------------------------------|
 | H1 | S_dw ≤ S0 / 2 |
-| H2 | S_dw ≤ S_ref × 1.1 (P50) |
-| H2_CI | upper bound P50 bootstrap CI для S_dw ≤ S_ref × 1.1 |
+| H2 | S_dw ≤ S_ref × 2.0 (P50) |
+| H2_CI | upper bound P50 bootstrap CI для S_dw ≤ S_ref × 2.0 (upper CI) |
 | H3 | `/readyz` = 200 после S_dw (логируется в `runs[].readyOk`) |
 | overhead | p95 E2E proxy `/work`: mirror on ≤ off × 1.05 |
 

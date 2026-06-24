@@ -77,26 +77,79 @@ func StartSession(coordURL, targetID, activeID string, readyAfter int) (string, 
 	return sess.ID, nil
 }
 
+func pollSessionStatus(coordURL, sessionID string) (string, error) {
+	resp, err := httpClient.Get(coordURL + "/v1/warmup/sessions/" + sessionID)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("session status %d", resp.StatusCode)
+	}
+	var s struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+		return "", err
+	}
+	if s.Status == "" {
+		return "", fmt.Errorf("session %s: empty status", sessionID)
+	}
+	return s.Status, nil
+}
+
+// WaitSessionHolding polls until warmup is ready and mirror is held at ratio=1.
+func WaitSessionHolding(coordURL, sessionID string, timeoutSec int) error {
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	lastStatus := "unknown"
+	for time.Now().Before(deadline) {
+		status, err := pollSessionStatus(coordURL, sessionID)
+		if err == nil {
+			lastStatus = status
+			if status == "holding" || status == "ready" {
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("session %s not holding within %ds (last status: %s)", sessionID, timeoutSec, lastStatus)
+}
+
 // WaitSessionCompleted polls until session status is completed.
 func WaitSessionCompleted(coordURL, sessionID string, timeoutSec int) error {
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	lastStatus := "unknown"
 	for time.Now().Before(deadline) {
-		resp, err := httpClient.Get(coordURL + "/v1/warmup/sessions/" + sessionID)
+		status, err := pollSessionStatus(coordURL, sessionID)
 		if err == nil {
-			var s struct {
-				Status string `json:"status"`
-			}
-			if err := json.NewDecoder(resp.Body).Decode(&s); err == nil && s.Status != "" {
-				lastStatus = s.Status
-			}
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			if lastStatus == "completed" {
+			lastStatus = status
+			if status == "completed" {
 				return nil
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("session %s not completed within %ds (last status: %s)", sessionID, timeoutSec, lastStatus)
+}
+
+// CompleteSession signals the coordinator to disable mirror and mark session completed.
+func CompleteSession(coordURL, sessionID string) error {
+	req, err := http.NewRequest(http.MethodPost, coordURL+"/v1/warmup/sessions/"+sessionID+"/complete", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("complete session status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
 }

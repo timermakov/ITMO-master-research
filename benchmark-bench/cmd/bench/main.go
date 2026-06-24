@@ -11,6 +11,7 @@ import (
 
 	"github.com/itmo-vkr/dwss/benchmark-bench/internal/experiment"
 	"github.com/itmo-vkr/dwss/benchmark-bench/internal/profile"
+	"github.com/itmo-vkr/dwss/benchmark-bench/internal/progress"
 	"github.com/itmo-vkr/dwss/benchmark-bench/internal/report"
 )
 
@@ -58,6 +59,8 @@ func runCmd(args []string) {
 	if err := m.ValidateWarmupReadyAfter(); err != nil {
 		log.Fatal(err)
 	}
+
+	progress.LogPlan(selected, progress.EstimateTotalSec(m, selected))
 
 	ctx := context.Background()
 	results, hypo, err := runScenarios(ctx, m, selected)

@@ -73,8 +73,10 @@ make compose-up
 make bench-s0
 make bench-s-ref
 make bench-s-dw
-make bench-h4
+
 make bench-all
+
+make bench-overhead
 ```
 
 ## Сборка и тесты
@@ -111,11 +113,12 @@ Projects/
 
 ## Документация
 
-- [docs/requirements.md](docs/requirements.md) — FR/NFR, гипотезы H1–H4
-- [docs/architecture.md](docs/architecture.md) — компоненты, ZK, ramp
-- [docs/benchmark-methodology.md](docs/benchmark-methodology.md) — S0/S_ref/S_dw, T_first
-- [docs/warmkit-api.md](docs/warmkit-api.md) — API библиотеки warmkit
-- [LoadedService/README.md](LoadedService/README.md) — HTTP API сервиса
+- [docs/requirements.md](requirements.md) — FR/NFR, гипотезы H1–H4
+- [docs/architecture.md](architecture.md) — компоненты, ZK, ramp
+- [docs/benchmark-methodology.md](benchmark-methodology.md) — S0/S_ref/S_dw, T_first
+- [docs/warmkit-api.md](warmkit-api.md) — API библиотеки warmkit
+- [docs/nir/](nir/) — тексты НИР 2 (исследование и отчёт)
+- [LoadedService/README.md](../LoadedService/README.md) — HTTP API сервиса
 
 ## Конфигурация
 

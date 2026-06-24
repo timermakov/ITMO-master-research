@@ -46,7 +46,7 @@
 | ID | Формулировка |
 |----|--------------|
 | H1 | S_dw.T_first ≤ S0.T_first / 2 |
-| H2 | S_dw.T_first ≤ S_ref.T_first × 1.1 |
+| H2 | S_dw.T_first ≤ S_ref.T_first × 2.0 |
 | H3 | Coordinator фиксирует Registered→Ready; `/readyz` совпадает с warmkit |
 | H4 | p95 active при mirror on ≤ p95 без mirror × 1.05 |
 

@@ -12,13 +12,14 @@ results/
 .idea/
 .cache/
 tmp/
+docs/
 
 LoadedService/bin/
 LoadedService/data/
 
 **/__pycache__/
 *.pyc
-figures/*
+figures_*/*
 !figures/
 !figures/README.md
 !figures/manifest.json

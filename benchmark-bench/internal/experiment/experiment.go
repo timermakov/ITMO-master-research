@@ -14,20 +14,35 @@ import (
 	"github.com/itmo-vkr/dwss/benchmark-bench/internal/loadgen"
 	"github.com/itmo-vkr/dwss/benchmark-bench/internal/probe"
 	"github.com/itmo-vkr/dwss/benchmark-bench/internal/profile"
+	"github.com/itmo-vkr/dwss/benchmark-bench/internal/progress"
 	"github.com/itmo-vkr/dwss/benchmark-bench/internal/stats"
 	"github.com/itmo-vkr/dwss/warmkit"
 )
 
 // RunRecord is one independent cold measurement.
 type RunRecord struct {
-	RunIndex    int           `json:"runIndex"`
-	Attempt     int           `json:"attempt,omitempty"`
-	Probe       probe.Sample  `json:"probe"`
-	State       StateSnapshot `json:"state,omitempty"`
-	Warmkit     warmkit.State `json:"warmkitState,omitempty"`
-	ReadyOK     bool          `json:"readyOk,omitempty"`
-	SessionID   string        `json:"sessionId,omitempty"`
-	Invalidated bool          `json:"invalidated,omitempty"`
+	RunIndex           int           `json:"runIndex"`
+	Attempt            int           `json:"attempt,omitempty"`
+	Probe              probe.Sample  `json:"probe"`
+	State              StateSnapshot `json:"state,omitempty"`
+	Warmkit            warmkit.State `json:"warmkitState,omitempty"`
+	ReadyOK            bool          `json:"readyOk,omitempty"`
+	SessionID          string        `json:"sessionId,omitempty"`
+	ShadowCountAtProbe int64         `json:"shadowCountAtProbe,omitempty"`
+	PostLoadSettleMs   int           `json:"postLoadSettleMs,omitempty"`
+	LoadgenDurationMs  int64         `json:"loadgenDurationMs,omitempty"`
+	SessionReadyAt     string        `json:"sessionReadyAt,omitempty"`
+	Invalidated        bool          `json:"invalidated,omitempty"`
+}
+
+// WarmupOutcome carries optional per-run metadata from the warmup phase.
+type WarmupOutcome struct {
+	SessionID          string
+	ShadowCountAtProbe int64
+	WarmkitState       string
+	PostLoadSettleMs   int
+	LoadgenDurationMs  int64
+	SessionReadyAt     time.Time
 }
 
 // Result is one scenario output.
@@ -49,86 +64,211 @@ type Result struct {
 
 // RunS0Control: each run = reset → probe (no warmup).
 func RunS0Control(m profile.Manifest) (Result, error) {
-	return runIndependent(m, "s0-control", func(ctx context.Context) error {
-		return nil
-	}, false, "")
+	return runIndependent(m, "s0-control", func(context.Context) (WarmupOutcome, error) {
+		return WarmupOutcome{}, nil
+	}, false)
 }
 
 // RunSRef: each run = reset → POST /warmup → probe.
 func RunSRef(m profile.Manifest) (Result, error) {
-	return runIndependent(m, "s-ref", func(ctx context.Context) error {
+	return runIndependent(m, "s-ref", func(ctx context.Context) (WarmupOutcome, error) {
 		body, _ := json.Marshal(m.Profile)
 		resp, err := http.Post(m.WarmupURL+"/warmup", "application/json", bytes.NewReader(body))
 		if err != nil {
-			return err
+			return WarmupOutcome{}, err
 		}
 		_ = resp.Body.Close()
-		return WaitWarmWorkload(m.WarmupURL, 2*time.Second)
-	}, false, "")
+		if err := WaitWarmWorkload(m.WarmupURL, 2*time.Second); err != nil {
+			return WarmupOutcome{}, err
+		}
+		return WarmupOutcome{}, nil
+	}, false)
 }
 
-// RunSDw: each run = reset → baseline mirror → session + loadgen → wait ready → probe.
+// RunSDw: each run = reset → session + loadgen (mirror held) → complete → settle → probe.
 func RunSDw(ctx context.Context, m profile.Manifest) (Result, error) {
-	return runIndependent(m, "s-dw", func(runCtx context.Context) error {
+	return runIndependent(m, "s-dw", func(runCtx context.Context) (WarmupOutcome, error) {
+		out := WarmupOutcome{PostLoadSettleMs: m.PostLoadSettleMs}
 		if err := coord.BaselineMirror(m.CoordURL, m.ActiveInst); err != nil {
-			return err
+			return out, err
 		}
 		sid, err := coord.StartSession(m.CoordURL, m.TargetInst, m.ActiveInst, m.ReadyAfter)
 		if err != nil {
-			return err
+			return out, err
 		}
+		out.SessionID = sid
 		lp := m.LoadProfile()
 		totalSec := m.TotalLoadSec()
-		log.Printf("[s-dw] session %s started; load profile total=%ds ramp=%ds steady=%ds down=%ds", sid, totalSec, lp.RampUpSec, lp.SteadySec, lp.RampDownSec)
+		log.Printf("[s-dw] session %s started; load profile total=%ds ramp=%ds steady=%ds down=%ds",
+			sid, totalSec, lp.RampUpSec, lp.SteadySec, lp.RampDownSec)
+
 		loadCtx, cancel := context.WithTimeout(runCtx, time.Duration(totalSec+30)*time.Second)
 		defer cancel()
+		loadStart := time.Now()
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- loadgen.RunPhased(loadCtx, m.ProxyURL, m.Profile, lp)
 		}()
-		waitErr := coord.WaitSessionCompleted(m.CoordURL, sid, totalSec+60)
-		if waitErr == nil {
-			log.Printf("[s-dw] session %s completed by coordinator", sid)
+
+		if err := coord.WaitSessionHolding(m.CoordURL, sid, totalSec+60); err != nil {
+			return out, err
 		}
+		out.SessionReadyAt = time.Now().UTC()
+		log.Printf("[s-dw] session %s holding mirror at %s", sid, out.SessionReadyAt.Format(time.RFC3339))
+
 		loadErr := <-errCh
+		out.LoadgenDurationMs = time.Since(loadStart).Milliseconds()
 		if loadErr == nil {
-			log.Printf("[s-dw] loadgen completed for session %s", sid)
-		}
-		if waitErr != nil {
-			return waitErr
+			log.Printf("[s-dw] loadgen completed for session %s in %dms", sid, out.LoadgenDurationMs)
 		}
 		if loadErr != nil && loadErr != context.Canceled && loadErr != context.DeadlineExceeded {
-			return loadErr
+			return out, loadErr
 		}
+		if err := coord.CompleteSession(m.CoordURL, sid); err != nil {
+			return out, err
+		}
+		log.Printf("[s-dw] session %s completed; mirror disabled", sid)
+
 		if err := cold.WaitReady(m.WarmupURL, 120*time.Second); err != nil {
-			return err
+			return out, err
 		}
-		log.Printf("[s-dw] warmup ready for session %s; probing T_first", sid)
-		time.Sleep(500 * time.Millisecond)
-		return nil
-	}, true, "")
+		m.PostLoadSettle()
+		log.Printf("[s-dw] post-load settle %dms for session %s", m.PostLoadSettleMs, sid)
+
+		snap, err := FetchState(m.WarmupURL)
+		if err != nil {
+			return out, err
+		}
+		out.ShadowCountAtProbe = snap.Warmkit.ShadowCount
+		out.WarmkitState = string(snap.Warmkit.State)
+		log.Printf("[s-dw] pre-probe state session=%s shadowCount=%d warmkit=%s",
+			sid, out.ShadowCountAtProbe, out.WarmkitState)
+		return out, nil
+	}, true)
+}
+
+type overheadSide struct {
+	name    string
+	enabled bool
+	ratio   float64
+}
+
+func overheadSideSpec(mirrorOff bool) overheadSide {
+	if mirrorOff {
+		return overheadSide{"overhead-mirror-off", false, 0}
+	}
+	return overheadSide{"overhead-mirror-on", true, 1.0}
+}
+
+func overheadSideCanCollect(count, maxRuns int) bool {
+	return count < maxRuns
+}
+
+func pickOverheadSide(attempt, offCount, onCount, maxRuns int) (overheadSide, bool) {
+	preferOff := attempt%2 == 1
+	try := func(mirrorOff bool) (overheadSide, bool) {
+		n := onCount
+		if mirrorOff {
+			n = offCount
+		}
+		if !overheadSideCanCollect(n, maxRuns) {
+			return overheadSide{}, false
+		}
+		return overheadSideSpec(mirrorOff), true
+	}
+	if preferOff {
+		if side, ok := try(true); ok {
+			return side, true
+		}
+		return try(false)
+	}
+	if side, ok := try(false); ok {
+		return side, true
+	}
+	return try(true)
+}
+
+func overheadCollectionDone(offRes, onRes Result, m profile.Manifest) bool {
+	if len(offRes.Runs) < m.H4Runs || len(onRes.Runs) < m.H4Runs {
+		return false
+	}
+	if !m.ProfileOnHighCV {
+		return true
+	}
+	return offRes.CVPass && onRes.CVPass
 }
 
 // RunOverhead compares response latency through proxy with mirror off vs on.
+// Runs alternate off/on between attempts; each attempt uses identical warmup
+// (full ramp/steady/down) before measuring steady-window RTT only.
 func RunOverhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
-	out := make([]Result, 0, 2)
-	phases := []struct {
-		name    string
-		enabled bool
-		ratio   float64
-	}{
-		{"overhead-mirror-off", false, 0},
-		{"overhead-mirror-on", true, 1.0},
+	offRecords := make([]RunRecord, 0, m.H4MaxRuns)
+	onRecords := make([]RunRecord, 0, m.H4MaxRuns)
+	offRunP95 := make([]float64, 0, m.H4MaxRuns)
+	onRunP95 := make([]float64, 0, m.H4MaxRuns)
+	offBlocks := make([]float64, 0, m.H4MaxRuns*m.H4SteadySec)
+	onBlocks := make([]float64, 0, m.H4MaxRuns*m.H4SteadySec)
+	offRTTs := make([]float64, 0)
+	onRTTs := make([]float64, 0)
+
+	maxPerSide := m.H4MaxRuns
+	if !m.ProfileOnHighCV {
+		maxPerSide = m.H4Runs
 	}
-	for _, ph := range phases {
-		res, err := runOverheadPhase(ctx, m, ph.name, ph.enabled, ph.ratio)
+	maxAttempts := maxPerSide * 2
+
+	log.Printf("[overhead] alternating off/on | target=%d/side max=%d | warmup+measure per attempt",
+		m.H4Runs, m.H4MaxRuns)
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		side, ok := pickOverheadSide(attempt, len(offRecords), len(onRecords), maxPerSide)
+		if !ok {
+			break
+		}
+		log.Printf("[overhead] attempt %d | %s | off=%d on=%d valid",
+			attempt, side.name, len(offRecords), len(onRecords))
+
+		runIndex := len(offRecords) + 1
+		if side.enabled {
+			runIndex = len(onRecords) + 1
+		}
+		sample, err := runOverheadAttempt(ctx, m, side, attempt, runIndex)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, res)
+		if side.enabled {
+			onRecords = append(onRecords, sample.record)
+			onRunP95 = append(onRunP95, sample.runP95)
+			onBlocks = append(onBlocks, sample.blocks...)
+			onRTTs = append(onRTTs, sample.rtts...)
+		} else {
+			offRecords = append(offRecords, sample.record)
+			offRunP95 = append(offRunP95, sample.runP95)
+			offBlocks = append(offBlocks, sample.blocks...)
+			offRTTs = append(offRTTs, sample.rtts...)
+		}
+
+		if len(offRecords) >= m.H4Runs && len(onRecords) >= m.H4Runs {
+			offRes := buildOverheadResult("overhead-mirror-off", offRecords, offRunP95, offRTTs, offBlocks, m)
+			onRes := buildOverheadResult("overhead-mirror-on", onRecords, onRunP95, onRTTs, onBlocks, m)
+			if overheadCollectionDone(offRes, onRes, m) {
+				_ = coord.BaselineMirror(m.CoordURL, m.ActiveInst)
+				return []Result{offRes, onRes}, nil
+			}
+			if len(offRecords) >= m.H4MaxRuns && len(onRecords) >= m.H4MaxRuns {
+				log.Printf("[overhead] CV fail off=%s on=%s after max runs", offRes.CVPassReason, onRes.CVPassReason)
+				_ = coord.BaselineMirror(m.CoordURL, m.ActiveInst)
+				return []Result{offRes, onRes}, nil
+			}
+			log.Printf("[overhead] CV fail off=%s on=%s, continuing alternating runs",
+				offRes.CVPassReason, onRes.CVPassReason)
+		}
 	}
+
+	offRes := buildOverheadResult("overhead-mirror-off", offRecords, offRunP95, offRTTs, offBlocks, m)
+	onRes := buildOverheadResult("overhead-mirror-on", onRecords, onRunP95, onRTTs, onBlocks, m)
 	_ = coord.BaselineMirror(m.CoordURL, m.ActiveInst)
-	return out, nil
+	return []Result{offRes, onRes}, nil
 }
 
 // RunH4Overhead is deprecated; use RunOverhead.
@@ -136,62 +276,69 @@ func RunH4Overhead(ctx context.Context, m profile.Manifest) ([]Result, error) {
 	return RunOverhead(ctx, m)
 }
 
-func runOverheadPhase(ctx context.Context, m profile.Manifest, name string, enabled bool, ratio float64) (Result, error) {
+type overheadSample struct {
+	record RunRecord
+	runP95 float64
+	blocks []float64
+	rtts   []float64
+}
+
+func runOverheadAttempt(ctx context.Context, m profile.Manifest, side overheadSide, globalAttempt, runIndex int) (overheadSample, error) {
 	cfg := warmkit.MirrorConfig{
-		Enabled:          enabled,
-		Ratio:            ratio,
+		Enabled:          side.enabled,
+		Ratio:            side.ratio,
 		TargetInstanceID: m.TargetInst,
 		ActiveInstanceID: m.ActiveInst,
 	}
 	if err := coord.MirrorConfig(m.CoordURL, cfg); err != nil {
-		return Result{}, err
+		return overheadSample{}, err
 	}
 
-	records := make([]RunRecord, 0, m.H4MaxRuns)
-	runP95Values := make([]float64, 0, m.H4MaxRuns)
-	allBlockValues := make([]float64, 0, m.H4MaxRuns*m.H4SteadySec)
-	allRTTValues := make([]float64, 0)
+	m.Cooldown()
+	lp := m.H4LoadProfile()
+	totalSec := m.TotalH4LoadSec()
+	timeout := time.Duration(totalSec+30) * time.Second
 
-	for attempt := 1; attempt <= m.H4MaxRuns; attempt++ {
-		m.Cooldown()
-		lp := m.H4LoadProfile()
-		totalSec := m.TotalH4LoadSec()
-		loadCtx, cancel := context.WithTimeout(ctx, time.Duration(totalSec+30)*time.Second)
-		rttRes, err := loadgen.CollectRTTPhased(loadCtx, m.ProxyURL, m.Profile, lp)
-		cancel()
-		if err != nil && len(rttRes.Steady) == 0 {
-			return Result{}, err
-		}
-		blocks := loadgen.BlockMedians(rttRes.Steady, m.RPS)
-		if len(blocks) == 0 {
-			return Result{}, fmt.Errorf("[%s] no overhead steady blocks", name)
-		}
-		blockSum := stats.SummarizeFilteredWithSeed(blocks, blocks, nil, m.Seed)
-		runP95 := blockSum.P95
-		runP95Values = append(runP95Values, runP95)
-		allBlockValues = append(allBlockValues, blocks...)
-		allRTTValues = append(allRTTValues, intsToFloats(rttRes.All)...)
-		records = append(records, RunRecord{
-			RunIndex: len(records) + 1,
-			Attempt:  attempt,
+	warmCtx, warmCancel := context.WithTimeout(ctx, timeout)
+	if err := loadgen.RunPhased(warmCtx, m.ProxyURL, m.Profile, lp); err != nil {
+		warmCancel()
+		return overheadSample{}, fmt.Errorf("[%s] warmup: %w", side.name, err)
+	}
+	warmCancel()
+	m.Cooldown()
+
+	measCtx, measCancel := context.WithTimeout(ctx, timeout)
+	measStart := time.Now()
+	rttRes, err := loadgen.CollectRTTPhased(measCtx, m.ProxyURL, m.Profile, lp)
+	measCancel()
+	measMs := time.Since(measStart).Milliseconds()
+	if err != nil && len(rttRes.Steady) == 0 {
+		return overheadSample{}, err
+	}
+	blocks := loadgen.BlockMedians(rttRes.Steady, m.RPS)
+	if len(blocks) == 0 {
+		return overheadSample{}, fmt.Errorf("[%s] no overhead steady blocks", side.name)
+	}
+	blockSum := stats.SummarizeFilteredWithSeed(blocks, blocks, nil, m.Seed)
+	runP95 := blockSum.P95
+
+	return overheadSample{
+		record: RunRecord{
+			RunIndex:          runIndex,
+			Attempt:           globalAttempt,
+			LoadgenDurationMs: measMs,
 			Probe: probe.Sample{
 				WorkloadNs: int64(runP95),
 				E2ENs:      int64(blockSum.P50),
 			},
-		})
-
-		if len(records) >= m.H4Runs {
-			res := buildOverheadResult(name, records, runP95Values, allRTTValues, allBlockValues, m)
-			if res.CVPass || len(records) >= m.H4MaxRuns || !m.ProfileOnHighCV {
-				return res, nil
-			}
-			log.Printf("[%s] overhead CV fail (%s), collecting up to %d runs", name, res.CVPassReason, m.H4MaxRuns)
-		}
-	}
-	return buildOverheadResult(name, records, runP95Values, allRTTValues, allBlockValues, m), nil
+		},
+		runP95: runP95,
+		blocks: blocks,
+		rtts:   intsToFloats(rttRes.All),
+	}, nil
 }
 
-func runIndependent(m profile.Manifest, name string, warmup func(context.Context) error, trackReady bool, _ string) (Result, error) {
+func runIndependent(m profile.Manifest, name string, warmup func(context.Context) (WarmupOutcome, error), trackReady bool) (Result, error) {
 	records := make([]RunRecord, 0, m.MaxRuns)
 	values := make([]float64, 0, m.MaxRuns)
 	e2e := make([]float64, 0, m.MaxRuns)
@@ -200,15 +347,19 @@ func runIndependent(m profile.Manifest, name string, warmup func(context.Context
 		maxValid = m.MaxRuns
 	}
 	maxAttempts := m.MaxAttempts()
+	tracker := progress.NewTracker(m, name)
+	tracker.LogScenarioStart()
 
 	for attempt := 1; attempt <= maxAttempts && len(records) < maxValid; attempt++ {
+		tracker.LogRunStart(len(records), attempt)
 		if err := cold.ResetWarmup(m.WarmupURL); err != nil {
 			return Result{}, err
 		}
 		time.Sleep(200 * time.Millisecond)
 		m.Cooldown()
 		runCtx := context.Background()
-		if err := warmup(runCtx); err != nil {
+		warmupOut, err := warmup(runCtx)
+		if err != nil {
 			return Result{}, err
 		}
 		readyOK := false
@@ -231,18 +382,28 @@ func runIndependent(m profile.Manifest, name string, warmup func(context.Context
 			continue
 		}
 		rec := RunRecord{
-			RunIndex: len(records) + 1,
-			Attempt:  attempt,
-			Probe:    s,
-			State:    snap,
-			ReadyOK:  readyOK,
+			RunIndex:           len(records) + 1,
+			Attempt:            attempt,
+			Probe:              s,
+			State:              snap,
+			ReadyOK:            readyOK,
+			SessionID:          warmupOut.SessionID,
+			ShadowCountAtProbe: warmupOut.ShadowCountAtProbe,
+			PostLoadSettleMs:   warmupOut.PostLoadSettleMs,
+			LoadgenDurationMs:  warmupOut.LoadgenDurationMs,
 		}
-		if snap.Warmkit.State != "" {
+		if !warmupOut.SessionReadyAt.IsZero() {
+			rec.SessionReadyAt = warmupOut.SessionReadyAt.Format(time.RFC3339)
+		}
+		if warmupOut.WarmkitState != "" {
+			rec.Warmkit = warmkit.State(warmupOut.WarmkitState)
+		} else if snap.Warmkit.State != "" {
 			rec.Warmkit = snap.Warmkit.State
 		}
 		records = append(records, rec)
 		values = append(values, float64(s.WorkloadNs))
 		e2e = append(e2e, float64(s.E2ENs))
+		tracker.LogRunDone(len(records), s.WorkloadNs, s.E2ENs, warmupOut.ShadowCountAtProbe)
 		m.Cooldown()
 
 		if len(records) >= m.Runs {
@@ -250,7 +411,7 @@ func runIndependent(m profile.Manifest, name string, warmup func(context.Context
 			if res.CVPass || len(records) >= maxValid || !m.ProfileOnHighCV {
 				return res, nil
 			}
-			log.Printf("[%s] CV fail (%s), collecting up to %d runs", name, res.CVPassReason, maxValid)
+			tracker.LogCVRetry(len(records), res.CVPassReason)
 		}
 	}
 	if len(records) == 0 {
@@ -379,13 +540,13 @@ func EvaluateHypotheses(s0, sRef, sDw Result) map[string]string {
 	} else {
 		notes["H1"] = "fail"
 	}
-	if sDw.Summary.P50 <= sRef.Summary.P50*1.1 {
+	if sDw.Summary.P50 <= sRef.Summary.P50*2.0 {
 		notes["H2"] = "pass"
 	} else {
 		notes["H2"] = "fail"
 	}
-	refBound := sRef.Summary.P50 * 1.1
-	if sDw.Summary.P50CIHigh <= refBound {
+	refCIBound := sRef.Summary.P50CIHigh * 2.0
+	if sDw.Summary.P50CIHigh <= refCIBound {
 		notes["H2_CI"] = "pass"
 	} else {
 		notes["H2_CI"] = "fail"

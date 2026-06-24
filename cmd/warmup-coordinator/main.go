@@ -31,6 +31,7 @@ const (
 type session struct {
 	ID               string `json:"id"`
 	TargetInstanceID string `json:"targetInstanceId"`
+	ActiveInstanceID string `json:"activeInstanceId"`
 	ReadyAfter       int    `json:"readyAfter"`
 	Status           string `json:"status"`
 }
@@ -114,6 +115,7 @@ func main() {
 	})
 	mux.HandleFunc("POST /v1/warmup/sessions", c.createSession)
 	mux.HandleFunc("GET /v1/warmup/sessions/{id}", c.getSession)
+	mux.HandleFunc("POST /v1/warmup/sessions/{id}/complete", c.completeSession)
 	mux.HandleFunc("DELETE /v1/warmup/sessions/{id}", c.deleteSession)
 	mux.HandleFunc("PUT /v1/mirror/config", c.setMirrorConfig)
 
@@ -158,7 +160,13 @@ func (c *coordinator) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := time.Now().Format("20060102150405.000")
-	s := &session{ID: id, TargetInstanceID: req.TargetInstanceID, ReadyAfter: req.ReadyAfter, Status: "running"}
+	s := &session{
+		ID:               id,
+		TargetInstanceID: req.TargetInstanceID,
+		ActiveInstanceID: req.ActiveInstanceID,
+		ReadyAfter:       req.ReadyAfter,
+		Status:           "running",
+	}
 	c.mu.Lock()
 	c.sessions[id] = s
 	c.mu.Unlock()
@@ -210,15 +218,50 @@ func (c *coordinator) runRamp(ctx context.Context, sessionID, target, active str
 		time.Sleep(c.interval)
 	}
 
-	cfg.Ratio = 0
-	cfg.ActiveInstanceID = target
 	_ = warmkit.WriteMirrorConfig(c.conn, c.service, cfg)
 
 	c.mu.Lock()
 	if s, ok := c.sessions[sessionID]; ok {
-		s.Status = "completed"
+		s.Status = "holding"
 	}
 	c.mu.Unlock()
+	c.log.Info("session holding mirror until complete", slog.String("session", sessionID))
+}
+
+func (c *coordinator) completeSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	c.mu.Lock()
+	s, ok := c.sessions[id]
+	if !ok {
+		c.mu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	if s.Status == "completed" {
+		c.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(s)
+		return
+	}
+	target := s.TargetInstanceID
+	active := s.ActiveInstanceID
+	s.Status = "completed"
+	c.mu.Unlock()
+
+	cfg := warmkit.MirrorConfig{
+		Enabled:          false,
+		Ratio:            0,
+		TargetInstanceID: target,
+		ActiveInstanceID: active,
+	}
+	if err := warmkit.WriteMirrorConfig(c.conn, c.service, cfg); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	c.log.Info("session completed, mirror disabled", slog.String("session", id))
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s)
 }
 
 func (c *coordinator) instanceReady(instanceID string) bool {

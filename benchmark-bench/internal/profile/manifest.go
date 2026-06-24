@@ -63,6 +63,7 @@ type Manifest struct {
 	CVThresholdSRef  float64                 `json:"cvThresholdSRef"`
 	CVThresholdSDw   float64                 `json:"cvThresholdSDw"`
 	CooldownMs       int                     `json:"cooldownMs"`
+	PostLoadSettleMs int                     `json:"postLoadSettleMs"`
 	EnvProfileName   string                  `json:"envProfileName,omitempty"`
 	TargetInst       string                  `json:"targetInstanceId"`
 	ActiveInst       string                  `json:"activeInstanceId"`
@@ -161,6 +162,9 @@ func LoadFromEnv() (Manifest, error) {
 		return m, err
 	}
 	if m.CooldownMs, err = envcfg.RequiredInt("DWSS_BENCH_COOLDOWN_MS"); err != nil {
+		return m, err
+	}
+	if m.PostLoadSettleMs, err = envcfg.OptionalInt("DWSS_BENCH_POST_LOAD_SETTLE_MS", 3000); err != nil {
 		return m, err
 	}
 	if m.EnvProfileName, err = optionalString("DWSS_BENCH_ENV_PROFILE", ""); err != nil {
@@ -321,6 +325,14 @@ func (m Manifest) CVThresholdForScenario(scenario string) float64 {
 	default:
 		return m.CVThreshold
 	}
+}
+
+// PostLoadSettle sleeps after s-dw loadgen before T_first probe.
+func (m Manifest) PostLoadSettle() {
+	if m.PostLoadSettleMs <= 0 {
+		return
+	}
+	time.Sleep(time.Duration(m.PostLoadSettleMs) * time.Millisecond)
 }
 
 // Cooldown sleeps between independent cold runs.

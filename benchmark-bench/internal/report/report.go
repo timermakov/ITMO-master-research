@@ -66,6 +66,7 @@ func WriteMarkdown(outDir string, manifest profile.Manifest, results []experimen
 			fmt.Fprintf(&sb, "| _%s outliers_ | | | _indexes %v_ | | | | |\n", name, r.Summary.Outliers)
 		}
 	}
+	writeSDwDiagnostics(&sb, results)
 	if len(extra) > 0 {
 		sb.WriteString("\n## Hypotheses\n\n")
 		for _, key := range []string{"H1", "H2", "H2_CI", "H3", "overhead"} {
@@ -114,8 +115,10 @@ func writeMetadata(sb *strings.Builder, manifest profile.Manifest) {
 	}
 	fmt.Fprintf(sb, "- CV thresholds: global %.2f%%, cold %.2f%%, manual %.2f%%, dynamic %.2f%%\n",
 		manifest.CVThreshold, manifest.CVThresholdS0, manifest.CVThresholdSRef, manifest.CVThresholdSDw)
-	fmt.Fprintf(sb, "- Overhead runs: target `%d`, max `%d`; readyAfter actual `%d`\n\n",
+	fmt.Fprintf(sb, "- Overhead runs: target `%d`, max `%d`; readyAfter actual `%d`\n",
 		manifest.H4Runs, manifest.H4MaxRuns, manifest.ReadyAfterActual)
+	fmt.Fprintf(sb, "- Post-load settle (s-dw): `%d` ms; cooldown `%d` ms\n\n",
+		manifest.PostLoadSettleMs, manifest.CooldownMs)
 }
 
 func resultName(r experiment.Result) string {
@@ -124,6 +127,72 @@ func resultName(r experiment.Result) string {
 	}
 	name, _ := experiment.ScenarioInfo(r.Scenario)
 	return name
+}
+
+func writeSDwDiagnostics(sb *strings.Builder, results []experiment.Result) {
+	var sdw *experiment.Result
+	for i := range results {
+		if results[i].Scenario == "s-dw" {
+			sdw = &results[i]
+			break
+		}
+	}
+	if sdw == nil || len(sdw.Runs) == 0 {
+		return
+	}
+	var shadowTotal int64
+	var loadgenTotal int64
+	n := 0
+	for _, run := range sdw.Runs {
+		if run.ShadowCountAtProbe > 0 {
+			shadowTotal += run.ShadowCountAtProbe
+			loadgenTotal += run.LoadgenDurationMs
+			n++
+		}
+	}
+	if n == 0 {
+		return
+	}
+	sb.WriteString("\n## S_dw diagnostics\n\n")
+	fmt.Fprintf(sb, "- Median shadowCount at probe: `%d` (over %d runs with metadata)\n",
+		medianInt64(shadowCounts(sdw.Runs)), n)
+	fmt.Fprintf(sb, "- Median loadgen duration: `%d` ms\n", medianInt64(loadgenDurations(sdw.Runs)))
+	fmt.Fprintf(sb, "- Post-load settle: `%d` ms\n", sdw.Runs[0].PostLoadSettleMs)
+}
+
+func shadowCounts(runs []experiment.RunRecord) []int64 {
+	out := make([]int64, 0, len(runs))
+	for _, run := range runs {
+		if run.ShadowCountAtProbe > 0 {
+			out = append(out, run.ShadowCountAtProbe)
+		}
+	}
+	return out
+}
+
+func loadgenDurations(runs []experiment.RunRecord) []int64 {
+	out := make([]int64, 0, len(runs))
+	for _, run := range runs {
+		if run.LoadgenDurationMs > 0 {
+			out = append(out, run.LoadgenDurationMs)
+		}
+	}
+	return out
+}
+
+func medianInt64(values []int64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+	cp := append([]int64(nil), values...)
+	for i := 0; i < len(cp); i++ {
+		for j := i + 1; j < len(cp); j++ {
+			if cp[j] < cp[i] {
+				cp[i], cp[j] = cp[j], cp[i]
+			}
+		}
+	}
+	return cp[len(cp)/2]
 }
 
 func expectedRuns(manifest profile.Manifest, r experiment.Result) int {
