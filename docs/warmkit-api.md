@@ -89,7 +89,7 @@ type WorkloadProfile struct {
 }
 ```
 
-Общий контракт с LoadedService и benchmark-bench.
+Общий контракт с LoadedService и benchmark.
 
 ## MetricsSnapshot
 

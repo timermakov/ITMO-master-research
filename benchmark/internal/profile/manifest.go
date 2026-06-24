@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/loadgen"
+	"github.com/itmo-vkr/dwss/benchmark/internal/loadgen"
 	"github.com/itmo-vkr/dwss/internal/envcfg"
 	"github.com/itmo-vkr/dwss/warmkit"
 )

@@ -9,10 +9,10 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/experiment"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/profile"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/progress"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/report"
+	"github.com/itmo-vkr/dwss/benchmark/internal/experiment"
+	"github.com/itmo-vkr/dwss/benchmark/internal/profile"
+	"github.com/itmo-vkr/dwss/benchmark/internal/progress"
+	"github.com/itmo-vkr/dwss/benchmark/internal/report"
 )
 
 func main() {

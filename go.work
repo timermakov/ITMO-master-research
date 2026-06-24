@@ -2,7 +2,7 @@ go 1.22
 
 use (
 	./LoadedService
-	./benchmark-bench
+	./benchmark
 	./cmd/mirror-proxy
 	./cmd/warmup-coordinator
 	./internal/envcfg

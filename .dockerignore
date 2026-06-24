@@ -8,6 +8,6 @@ tmp/
 **/bin/
 **/data/
 LoadedService/data/
-benchmark-bench/
+benchmark/
 *.md
 !LoadedService/README.md

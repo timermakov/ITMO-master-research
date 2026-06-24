@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/experiment"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/profile"
+	"github.com/itmo-vkr/dwss/benchmark/internal/experiment"
+	"github.com/itmo-vkr/dwss/benchmark/internal/profile"
 )
 
 // Payload is the persisted benchmark result file format.

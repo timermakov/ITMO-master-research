@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/cold"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/coord"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/loadgen"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/probe"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/profile"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/progress"
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/stats"
+	"github.com/itmo-vkr/dwss/benchmark/internal/cold"
+	"github.com/itmo-vkr/dwss/benchmark/internal/coord"
+	"github.com/itmo-vkr/dwss/benchmark/internal/loadgen"
+	"github.com/itmo-vkr/dwss/benchmark/internal/probe"
+	"github.com/itmo-vkr/dwss/benchmark/internal/profile"
+	"github.com/itmo-vkr/dwss/benchmark/internal/progress"
+	"github.com/itmo-vkr/dwss/benchmark/internal/stats"
 	"github.com/itmo-vkr/dwss/warmkit"
 )
 

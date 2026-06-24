@@ -2,7 +2,7 @@
 
 ## Принцип
 
-Каждый **run** — независимое измерение на **холодном** warmup-инстансе. Между run выполняется `POST /reset` (сброс in-memory hashmap и warmkit FSM → Registered). Сценарии **не** гоняются подряд на одном горячем процессе.
+Каждый **прогон** — независимое измерение на **холодном** warmup-инстансе. Между прогонами выполняется `POST /reset` (сброс in-memory hashmap и warmkit FSM → Registered). Сценарии **не** гоняются подряд на одном горячем процессе.
 
 ## Workload: index-build
 
@@ -11,13 +11,13 @@
 - `POST /reset` → `index = nil`, `indexCold=true`
 - первый `GET /work` (или `POST /warmup`) строит hashmap (`index[i]=i`) и выполняет `samples` lookup
 - **`duration_ns`** = wall-clock **build + lookup** целиком (mmap не участвует)
-- целевой cold path: **10–100 ms** (`DWSS_INDEX_KEYS`, по умолчанию 100000)
+- целевой холодный путь: **10–100 ms** (`DWSS_INDEX_KEYS`, по умолчанию 100000)
 
 ## Первичная метрика
 
-**T_first** = `duration_ns` из **первого и единственного** боевого `GET /work` (без `X-Warmup-Shadow`) после фазы прогрева в данном run.
+**T_first** = `duration_ns` из **первого и единственного** боевого `GET /work` (без `X-Warmup-Shadow`) после фазы прогрева в данном прогоне.
 
-Вторичная метрика: **E2E** — wall-clock от клиента probe до ответа.
+Вторичная метрика: **E2E** — настенное время от клиента до ответа на контрольный запрос.
 
 Единый профиль во всех сценариях:
 
@@ -28,40 +28,40 @@
 ## Порядок действия при запуске
 
 ```text
-POST /reset  →  [фаза прогрева по сценарию]  →  один GET /work (probe)  →  cooldown
+POST /reset  →  [фаза прогрева по сценарию]  →  один GET /work (контрольный запрос)  →  пауза
 ```
 
-| Сценарий | Фаза прогрева | Probe |
-|----------|---------------|-------|
-| **S0** | нет | сразу `/work` (cold hashmap build) |
+| Сценарий | Фаза прогрева | Контрольный запрос |
+|----------|---------------|-------------------|
+| **S0** | нет | сразу `/work` (холодное построение hashmap) |
 | **S_ref** | `POST /warmup` с тем же Profile | `/work` (индекс уже построен) |
-| **S_dw** | baseline mirror → coordinator session → loadgen `GET /work` через proxy → `/readyz`=200 | `/work` на warmup URL |
+| **S_dw** | базовая конфигурация зеркалирования → сессия координатора → loadgen `GET /work` через прокси → `/readyz`=200 | `/work` на warmup URL |
 
 ## S_dw (динамический)
 
-1. `PUT /v1/mirror/config` — mirror off, active = `active-1`.
-2. `POST /v1/warmup/sessions` — ramp через coordinator.
-3. Параллельно: loadgen шлёт `GET /work?seed=&samples=` **через proxy** по профилю **ramp-up → steady → ramp-down** (см. ниже).
+1. `PUT /v1/mirror/config` — зеркалирование выкл., active = `active-1`.
+2. `POST /v1/warmup/sessions` — нарастание доли через координатор.
+3. Параллельно: loadgen шлёт `GET /work?seed=&samples=` **через прокси** по профилю **нарастание → плато → спад** (см. ниже).
 4. Ждём `session.status=completed` и `/readyz=200`.
-5. Один probe на warmup (не через proxy, без shadow header).
+5. Один контрольный запрос на warmup (не через прокси, без теневого заголовка).
 
-Coordinator ramp **60 s** (`RAMP_INTERVAL=10` × 6 steps), aligned with loadgen ramp-up. После шагов — **hold** mirror at ratio=1.0 до `Ready`/`Active` (max `DWSS_COORD_HOLD_MAX_SEC`).
+Наращивание доли координатором **60 s** (`RAMP_INTERVAL=10` × 6 шагов), синхронизировано с нарастанием нагрузки loadgen. После шагов — **удержание** зеркалирования при ratio=1.0 до `Ready`/`Active` (max `DWSS_COORD_HOLD_MAX_SEC`).
 
-benchmark-bench **не пишет в ZK** — только HTTP coordinator.
+benchmark **не пишет в ZK** — только HTTP координатора.
 
 По [рекомендациям по съёму метрик](https://habr.com/ru/articles/910760/): метрики **не** усредняются по всему прогону. Loadgen реализует три фазы:
 
 | Фаза | Переменная | Назначение |
 |------|------------|------------|
-| **Ramp-up** | `DWSS_BENCH_RAMP_UP_SEC` | Плавный рост RPS 0→max (прогрев соединений) |
-| **Steady** | `DWSS_BENCH_STEADY_SEC` | Постоянная нагрузка; **только здесь** считаются E2E/overhead метрики |
-| **Ramp-down** | `DWSS_BENCH_RAMP_DOWN_SEC` | Плавное снижение RPS; в статистику **не** входит |
+| **Нарастание** | `DWSS_BENCH_RAMP_UP_SEC` | Плавный рост RPS 0→max (прогрев соединений) |
+| **Плато** | `DWSS_BENCH_STEADY_SEC` | Постоянная нагрузка; **только здесь** считаются E2E и накладные расходы |
+| **Спад** | `DWSS_BENCH_RAMP_DOWN_SEC` | Плавное снижение RPS; в статистику **не** входит |
 
-RPS в ramp-up/down растёт/падает **линейно**. Для S_dw steady нужен для прогрева shadow через proxy; **T_first** по-прежнему снимается одним probe после завершения всей фазы нагрузки.
+RPS в фазах нарастания и спада растёт/падает **линейно**. Для S_dw фаза плато нужна для прогрева теневого трафика через прокси; **T_first** по-прежнему снимается одним контрольным запросом после завершения всей фазы нагрузки.
 
-Thesis-профиль: ramp **60 s**, steady **≥300 s** (5 min — минимум для устойчивых метрик), down **30 s**. Сценарий **overhead** использует тот же ramp/down, но `DWSS_BENCH_H4_STEADY_SEC` для steady-окна E2E.
+Профиль для отчёта НИР: нарастание **60 s**, плато **≥300 s** (5 min — минимум для устойчивых метрик), спад **30 s**. Сценарий **накладных расходов** использует тот же нарастание/спад, но `DWSS_BENCH_H4_STEADY_SEC` для окна E2E на плато.
 
-## Overhead (зеркалирование)
+## Накладные расходы зеркалирования (H4)
 
 Отдельный запуск, не смешивается с T_first:
 
@@ -71,30 +71,30 @@ bench run --scenarios overhead --out ../results/overhead
 
 Измеряется **E2E p95** `GET /work` **через proxy** (клиентский путь на active):
 
-1. Повторы **чередуют** mirror off и mirror on (несколько блоков off→on подряд).
-2. Перед каждым измерением — **одинаковый warmup**: полный профиль ramp → steady → down (RTT не учитывается).
-3. Затем второй проход тем же профилем; **метрики только из steady-окна** второго прохода.
-4. На каждую сторону — `DWSS_BENCH_H4_RUNS` валидных повторов (до `DWSS_BENCH_H4_MAX_RUNS` при adaptive CV).
-5. Сравнить p95 block-medians: pass если p95(on) ≤ p95(off) × 1.05.
+1. Повторы **чередуют** зеркалирование выкл. и вкл. (несколько блоков выкл.→вкл. подряд).
+2. Перед каждым измерением — **одинаковый прогрев**: полный профиль нарастание → плато → спад (RTT не учитывается).
+3. Затем второй проход тем же профилем; **метрики только из окна плато** второго прохода.
+4. На каждую сторону — `DWSS_BENCH_H4_RUNS` валидных повторов (до `DWSS_BENCH_H4_MAX_RUNS` при адаптивном CV).
+5. Сравнить P95 медиан блоков: выполнено, если P95(вкл.) ≤ P95(выкл.) × 1,05.
 
-После overhead — baseline mirror off.
+После серии накладных расходов — базовая конфигурация зеркалирования выкл.
 
 ## Статистика
 
-- `DWSS_BENCH_RUNS ≥ 20` для финального отчёта НИР; `DWSS_BENCH_MAX_RUNS=40` при adaptive runs.
-- `DWSS_BENCH_PROFILE_ON_HIGH_CV=true` — при CV fail после `RUNS` добирать до `MAX_RUNS`.
-- Overhead выполняется отдельными повторами `DWSS_BENCH_H4_RUNS` / `DWSS_BENCH_H4_MAX_RUNS`: каждый повтор даёт run-level P95 по 1-секундным block-medians.
+- `DWSS_BENCH_RUNS ≥ 20` для финального отчёта НИР; `DWSS_BENCH_MAX_RUNS=40` при адаптивных прогонах.
+- `DWSS_BENCH_PROFILE_ON_HIGH_CV=true` — при превышении порога CV после `RUNS` добирать до `MAX_RUNS`.
+- Серия накладных расходов выполняется отдельными повторами `DWSS_BENCH_H4_RUNS` / `DWSS_BENCH_H4_MAX_RUNS`: каждый повтор даёт P95 по 1-секундным медианам блоков.
 - `DWSS_BENCH_READY_AFTER` **должен совпадать** с `DWSS_WARMUP_READY_AFTER` (проверка через `GET /state` при старте).
-- **Valid run**: перед probe проверяется `GET /state` (`indexCold=true` для S0, `indexCold=false` для S_ref/S_dw); invalid run повторяется, в stats не попадает.
-- После `POST /warmup` (S_ref) — poll `/state` до 2 s, пока `indexCold=false`.
-- Агрегация по **P50/P95 workload_ns** по valid runs; **95% bootstrap CI** для mean и **P50**.
-- **CV** считается по filtered set. Глобальный порог задаёт `DWSS_BENCH_CV_THRESHOLD`, но для отчётной серии допустимы scenario-specific пороги:
-  - `DWSS_BENCH_CV_THRESHOLD_S0` — cold baseline может иметь более высокую естественную дисперсию.
+- **Валидный прогон**: перед контрольным запросом проверяется `GET /state` (`indexCold=true` для S0, `indexCold=false` для S_ref/S_dw); невалидный прогон повторяется, в статистику не попадает.
+- После `POST /warmup` (S_ref) — опрос `/state` до 2 s, пока `indexCold=false`.
+- Агрегация по **P50/P95 workload_ns** по валидным прогонам; **95% bootstrap-ДИ** для mean и **P50**.
+- **CV** считается по отфильтрованной выборке. Глобальный порог задаёт `DWSS_BENCH_CV_THRESHOLD`, но для отчётной серии допустимы пороги по сценариям:
+  - `DWSS_BENCH_CV_THRESHOLD_S0` — холодный эталон может иметь более высокую естественную дисперсию.
   - `DWSS_BENCH_CV_THRESHOLD_S_REF` и `DWSS_BENCH_CV_THRESHOLD_S_DW` — прогретые сценарии, целевой **≤ 20%**.
-- Цель для НИР: CV прогретых сценариев **≤ 20%**. Cold path должен быть **≥ 10 ms**, иначе scheduler jitter доминирует.
-- Выбросы: фильтр **1.5×IQR**; индексы в `outlierRunIndexes`; raw runs сохраняются в JSON.
-- **Adaptive runs** (`DWSS_BENCH_PROFILE_ON_HIGH_CV=true`): при CV fail после `RUNS` — до `DWSS_BENCH_MAX_RUNS`; иначе exit 1.
-- `DWSS_BENCH_COOLDOWN_MS ≥ 5000` между runs.
+- Цель для НИР: CV прогретых сценариев **≤ 20%**. Холодный путь должен быть **≥ 10 ms**, иначе разброс планировщика доминирует.
+- Выбросы: фильтр **1.5×IQR**; индексы в `outlierRunIndexes`; исходные прогоны сохраняются в JSON.
+- **Адаптивные прогоны** (`DWSS_BENCH_PROFILE_ON_HIGH_CV=true`): при превышении порога CV после `RUNS` — до `DWSS_BENCH_MAX_RUNS`; иначе exit 1.
+- `DWSS_BENCH_COOLDOWN_MS ≥ 5000` между прогонами.
 
 ### Профили конфигурации
 
@@ -104,26 +104,26 @@ bench run --scenarios overhead --out ../results/overhead
 | **Lab** | 10–20 | 20–40 | 3–5 | 60 / 300 / 30 | 2000 | проверка на Windows/Docker |
 | **Debug** | 5 | 5–10 | 1 | 30 / 60 / 15 | 500 | быстрая проверка стенда |
 
-Перед финальной серией: отключить pprof, не запускать параллельные Docker builds/IDE-heavy процессы, прогреть сам стенд dry-run запуском, зафиксировать commit, `.env.local` (или hash значимых `DWSS_*`), Docker image IDs, OS/CPU/Go version.
+Перед финальной серией: отключить pprof, не запускать параллельные Docker builds/IDE-heavy процессы, прогреть сам стенд пробным запуском, зафиксировать commit, `.env.local` (или hash значимых `DWSS_*`), Docker image IDs, OS/CPU/Go version.
 
-## Overhead — агрегация блоков
+## Накладные расходы — агрегация блоков
 
-RTT агрегируются в **1-секундные блоки** (размер блока = `RPS`): медиана RTT в блоке. Блоки строятся **только из steady-фазы**.
+RTT агрегируются в **1-секундные блоки** (размер блока = `RPS`): медиана RTT в блоке. Блоки строятся **только из фазы плато**.
 
-Для финального overhead каждый повтор `overhead-mirror-off`/`overhead-mirror-on` даёт run-level P95 по block-medians. Итоговое сравнение: mirror on должен быть ≤ mirror off × 1.05. Timeseries block-medians — диагностический график стабильности.
+Для финальной серии накладных расходов каждый повтор `overhead-mirror-off`/`overhead-mirror-on` даёт P95 по медианам блоков. Итоговое сравнение: зеркалирование вкл. должно быть ≤ зеркалирование выкл. × 1,05. Временной ряд медиан блоков — диагностический график стабильности.
 
 ## Изоляция и порядок
 
 - Сценарии: `bench run --scenarios s0-control,s-ref,s-dw` или `all` (только три основных).
 - Overhead — отдельная команда и каталог `results/overhead/`.
-- `DWSS_BENCH_COOLDOWN_MS` — пауза между reset и probe / между runs.
+- `DWSS_BENCH_COOLDOWN_MS` — пауза между reset и контрольным запросом / между прогонами.
 - Не смешивать profiling (pprof) с замерами T_first.
 
 ## Manifest (`results.json`)
 
 - `protocolVersion`, `gitCommit`, `GOMAXPROCS`, `startedAt`
 - `gitDirty`, `goVersion`, `os`, `arch`, `numCPU`, `dockerVersion`, `dockerImages`
-- URLs, Profile, runs, `runs[]` с per-run probe + warmkit state
+- URLs, Profile, runs, `runs[]` с контрольным запросом и состоянием warmkit на прогон
 - CV thresholds, `h4Runs`, `h4MaxRuns`, `envProfileName`, actual `readyAfter`
 - `hypotheses`: H1, H2, H2_CI, H3 (для основных сценариев), `overhead` (для `bench run --scenarios overhead`)
 
@@ -133,29 +133,31 @@ RTT агрегируются в **1-секундные блоки** (разме�
 - `RUNS ≥ 20` для финальной серии.
 - `nFiltered ≥ 0.8 × N` для каждого сценария; иначе серия считается слишком шумной или требует отдельного разбора.
 - Для прогретых сценариев CV **≤ 20%**.
-- H1/H2/H2_CI/H3 и overhead имеют verdict `pass`.
-- Overhead выполнен повторяемой серией (`DWSS_BENCH_H4_RUNS > 1`) либо явно помечен как diagnostic-only.
+- H1/H2/H2_CI/H3 и накладные расходы имеют результат проверки `pass`.
+- Серия накладных расходов выполнена повторяемо (`DWSS_BENCH_H4_RUNS > 1`) либо явно помечена как diagnostic-only.
 - В отчёте указаны commit, профиль env, OS/CPU/Go/Docker, seed/samples/runs и правило фильтрации выбросов.
 
 ## Каталог графиков
 
-- `fig07_load_profile` — методика нагрузки: ramp-up, steady, ramp-down.
+- `fig07_load_profile` — методика нагрузки: нарастание, плато, спад.
 - `fig01_tfirst_p50` — главный эффект по `T_first` (построение hashmap при первом запросе).
-- `fig02_tfirst_runs` — разброс независимых run, filtered set и IQR-выбросы.
+- `fig02_tfirst_runs` — разброс независимых прогонов, отфильтрованная выборка и IQR-выбросы.
 - `fig03_hypotheses_h1_h2` — сводная проверка H1/H2/H2_CI/H3.
 - `fig04_cv_scenarios` — воспроизводимость и ограничения стенда.
-- `fig05_h4_p95` — накладные расходы зеркалирования (p95 E2E).
-- `fig06_h4_blocks_timeseries` — диагностический график стабильности steady-фазы overhead.
+- `fig05_h4_p95` — накладные расходы зеркалирования (P95 E2E).
+- `fig06_h4_blocks_timeseries` — диагностический график стабильности фазы плато (накладные расходы).
 
 ## Гипотезы
 
-| ID | Формулировка (по median P50 T_first) |
-|----|--------------------------------------|
-| H1 | S_dw ≤ S0 / 2 |
-| H2 | S_dw ≤ S_ref × 2.0 (P50) |
-| H2_CI | upper bound P50 bootstrap CI для S_dw ≤ S_ref × 2.0 (upper CI) |
-| H3 | `/readyz` = 200 после S_dw (логируется в `runs[].readyOk`) |
-| overhead | p95 E2E proxy `/work`: mirror on ≤ off × 1.05 |
+Сценарии: **S0** — холодный старт; **S_ref** — ручной `POST /warmup`; **S_dw** — динамический прогрев СДПС.
+
+| ID | Смысл | Критерий (по медиане P50 T_first, если не указано иное) |
+|----|-------|----------------------------------------------------------|
+| H1 | Динамический прогрев существенно быстрее холодного старта | P50(S_dw) ≤ P50(S0) / 2 |
+| H2 | Динамический прогрев не хуже эталона более чем в 2 раза | P50(S_dw) ≤ P50(S_ref) × 2,0 |
+| H2_CI | H2 с учётом bootstrap-ДИ | Верхняя граница 95% ДИ для P50(S_dw) ≤ 2 × верхняя граница ДИ для P50(S_ref) |
+| H3 | Готовность перед контрольным запросом в S_dw | `/readyz` = 200 (поле `runs[].readyOk`) |
+| H4 | Накладные расходы зеркалирования | P95 E2E через прокси `/work`: зеркалирование вкл. ≤ выкл. × 1,05 |
 
 ## CLI
 
@@ -168,7 +170,7 @@ make bench-all    # S0 + S_ref + S_dw + hypotheses
 ```
 
 ```bash
-cd benchmark-bench
+cd benchmark
 go run ./cmd/bench run --scenarios s0-control --out ../results/s0
 go run ./cmd/bench run --scenarios all --out ../results/full
 go run ./cmd/bench run --scenarios overhead --out ../results/overhead

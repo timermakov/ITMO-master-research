@@ -1,4 +1,4 @@
-"""Загрузка results.json из benchmark-bench."""
+"""Загрузка results.json из benchmark."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-module github.com/itmo-vkr/dwss/benchmark-bench
+module github.com/itmo-vkr/dwss/benchmark
 
 go 1.22
 

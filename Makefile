@@ -14,7 +14,7 @@ test:
 	cd LoadedService && go test ./...
 	cd cmd/mirror-proxy && go test ./...
 	cd cmd/warmup-coordinator && go test ./...
-	cd benchmark-bench && go test ./...
+	cd benchmark && go test ./...
 
 vet:
 	cd warmkit && go vet ./...
@@ -23,7 +23,7 @@ vet:
 	cd LoadedService && go vet ./...
 	cd cmd/mirror-proxy && go vet ./...
 	cd cmd/warmup-coordinator && go vet ./...
-	cd benchmark-bench && go vet ./...
+	cd benchmark && go vet ./...
 
 lint:
 	cd warmkit && GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" golangci-lint run ./...
@@ -32,13 +32,13 @@ lint:
 	cd LoadedService && GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" golangci-lint run ./...
 	cd cmd/mirror-proxy && GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" golangci-lint run ./...
 	cd cmd/warmup-coordinator && GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" golangci-lint run ./...
-	cd benchmark-bench && GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" golangci-lint run ./...
+	cd benchmark && GOLANGCI_LINT_CACHE="$(GOLANGCI_LINT_CACHE)" golangci-lint run ./...
 
 build:
 	cd LoadedService && go build -o ../bin/loadedservice ./cmd/server
 	cd cmd/mirror-proxy && go build -o ../../bin/mirror-proxy .
 	cd cmd/warmup-coordinator && go build -o ../../bin/warmup-coordinator .
-	cd benchmark-bench && go build -o ../bin/bench ./cmd/bench
+	cd benchmark && go build -o ../bin/bench ./cmd/bench
 
 tidy:
 	go work sync
@@ -48,7 +48,7 @@ tidy:
 	cd LoadedService && go mod tidy
 	cd cmd/mirror-proxy && go mod tidy
 	cd cmd/warmup-coordinator && go mod tidy
-	cd benchmark-bench && go mod tidy
+	cd benchmark && go mod tidy
 
 profile-cpu:
 	@test -n "$(DWSS_PPROF_HTTP_ADDR)" || (echo "DWSS_PPROF_HTTP_ADDR required in .env.local" && exit 1)
@@ -77,19 +77,19 @@ compose-down:
 	docker compose -f deploy/docker-compose.yml --env-file .env.local down
 
 bench-s0:
-	cd benchmark-bench && go run ./cmd/bench run s0-control --out ../results/s0
+	cd benchmark && go run ./cmd/bench run s0-control --out ../results/s0
 
 bench-s-ref:
-	cd benchmark-bench && go run ./cmd/bench run s-ref --out ../results/s-ref
+	cd benchmark && go run ./cmd/bench run s-ref --out ../results/s-ref
 
 bench-s-dw:
-	cd benchmark-bench && go run ./cmd/bench run s-dw --out ../results/s-dw
+	cd benchmark && go run ./cmd/bench run s-dw --out ../results/s-dw
 
 bench-overhead:
-	cd benchmark-bench && go run ./cmd/bench run --scenarios overhead --out ../results/overhead
+	cd benchmark && go run ./cmd/bench run --scenarios overhead --out ../results/overhead
 
 bench-all:
-	cd benchmark-bench && go run ./cmd/bench run --scenarios all --out ../results/full
+	cd benchmark && go run ./cmd/bench run --scenarios all --out ../results/full
 
 figures:
 	python -m pip install -q -r scripts/benchmark-figures/requirements.txt

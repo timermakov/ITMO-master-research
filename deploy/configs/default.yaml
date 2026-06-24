@@ -1,4 +1,4 @@
-# Env var names for benchmark-bench manifest (protocol v2).
+# Env var names for benchmark manifest (protocol v2).
 # Values only in .env.local.
 
 bench:

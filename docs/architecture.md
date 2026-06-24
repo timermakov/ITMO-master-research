@@ -5,9 +5,9 @@
 | Контур | Компоненты | Ответственность |
 |--------|------------|-----------------|
 | **DWSS** | warmkit, mirror-proxy, warmup-coordinator, LoadedService, ZooKeeper | Динамический прогрева нового инстанса production-трафиком |
-| **benchmark-bench** | experiment, loadgen, probe, stats, report | Протоколы S0/S_ref/S_dw/H4, статистика, отчёты |
+| **benchmark** | experiment, loadgen, probe, stats, report | Протоколы S0/S_ref/S_dw/H4, статистика, отчёты |
 
-benchmark-bench **не пишет** в ZooKeeper. Для S_dw вызывает HTTP API coordinator.
+benchmark **не пишет** в ZooKeeper. Для S_dw вызывает HTTP API coordinator.
 
 ## C4 Container Diagram
 
@@ -20,7 +20,7 @@ title Система динамического прогрева сервисо�
 
 actor "Production\nClient" as Client
 rectangle "Benchmark Bench" as BenchCont #white;line:dashed {
-  rectangle "benchmark-bench" as Bench
+  rectangle "benchmark" as Bench
 }
 
 rectangle "СДПС" {
@@ -66,7 +66,7 @@ Control plane: единственный writer `/config/{app}/mirror`, ramp rati
 
 Имитация нагруженного микросервиса (mmap + lazy index). Роли `active` и `warmup` через env.
 
-### benchmark-bench (`benchmark-bench/`)
+### benchmark (`benchmark/`)
 
 Стенд бенчмаркинга: T_first, median, p95, bootstrap CI, manifest.json.
 

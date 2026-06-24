@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/itmo-vkr/dwss/benchmark-bench/internal/profile"
+	"github.com/itmo-vkr/dwss/benchmark/internal/profile"
 )
 
 // Tracker logs per-scenario run progress and ETA.

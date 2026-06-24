@@ -17,7 +17,7 @@
 | Контур              | Назначение                                                          |
 | ------------------- | ------------------------------------------------------------------- |
 | **DWSS**            | warmkit, mirror-proxy, warmup-coordinator, LoadedService, ZooKeeper |
-| **benchmark-bench** | Эксперименты S0/S_ref/S_dw/H4, статистика, отчёты (не пишет в ZK)   
+| **benchmark** | Эксперименты S0/S_ref/S_dw/H4, статистика, отчёты (не пишет в ZK)   
 
 ```plantuml
 @startuml
@@ -27,7 +27,7 @@ skinparam shadowing false
 title СДПС — C4 Container
 
 actor "Client" as Client
-rectangle "benchmark-bench" as Bench #white;line:dashed
+rectangle "benchmark" as Bench #white;line:dashed
 rectangle "СДПС" {
   rectangle "mirror-proxy" as Proxy
   rectangle "warmup-coordinator" as Coord
@@ -104,7 +104,7 @@ Projects/
 ├── LoadedService/            # нагруженный микросервис
 ├── cmd/mirror-proxy/         # data plane
 ├── cmd/warmup-coordinator/   # control plane
-├── benchmark-bench/          # стенд бенчмаркинга
+├── benchmark/          # стенд бенчмаркинга
 ├── internal/envcfg/          # загрузка env без fallback
 ├── internal/pprofserver/     # опциональный pprof
 ├── deploy/                   # docker-compose
