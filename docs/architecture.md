@@ -4,7 +4,7 @@
 
 | Контур | Компоненты | Ответственность |
 |--------|------------|-----------------|
-| **DWSS** | warmkit, mirror-proxy, warmup-coordinator, LoadedService, ZooKeeper | Динамический прогрева нового инстанса production-трафиком |
+| **DWSS** | warmkit, mirror-proxy, warmup-coordinator, LoadedService, ZooKeeper | Динамический прогрев нового инстанса production-трафиком |
 | **benchmark** | experiment, loadgen, probe, stats, report | Протоколы S0/S_ref/S_dw/H4, статистика, отчёты |
 
 benchmark **не пишет** в ZooKeeper. Для S_dw вызывает HTTP API coordinator.
@@ -49,18 +49,18 @@ Proxy --> ZK : read mirror config
 
 Библиотека для инстанса с `ROLE=warmup`:
 
-- FSM: `Starting → Registered → Warming → Ready → Active | Failed`
+- Конечный автомат состояний: `«Starting» → «Registered» → «Warming» → «Ready» → «Active» | «Failed»`
 - Ephemeral-регистрация в `/services/{app}/instances/{id}`
 - Shadow middleware: счётчик GET, запрет мутаций при `X-Warmup-Shadow: 1`
 - Readiness handler для `/readyz`
 
 ### mirror-proxy (`cmd/mirror-proxy/`)
 
-Data plane: forward на active, async mirror GET на warmup по конфигу ZK.
+Контур данных: пересылка на active, асинхронное зеркалирование GET на warmup по конфигу ZK.
 
 ### warmup-coordinator (`cmd/warmup-coordinator/`)
 
-Control plane: единственный writer `/config/{app}/mirror`, ramp ratio, promote active.
+Управляющий контур: единственный writer `/config/{app}/mirror`, нарастание доли зеркалирования, перевод в активный режим.
 
 ### LoadedService (`LoadedService/`)
 
@@ -80,11 +80,11 @@ Control plane: единственный writer `/config/{app}/mirror`, ramp rati
 ## Динамический прогрев
 
 1. Coordinator создаёт сессию (`POST /v1/warmup/sessions`).
-2. Записывает mirror config: `enabled=true`, `ratio=0`, `targetInstanceId`.
-3. Каждые `DWSS_COORD_RAMP_INTERVAL_SEC` увеличивает `ratio` по `DWSS_COORD_RAMP_STEPS`.
-4. warmkit на warmup при `shadowCount ≥ ReadyAfter` → `Ready`, `/readyz=200`.
+2. Записывает конфигурацию зеркалирования: `enabled=true`, `ratio=0`, `targetInstanceId`.
+3. Каждые `DWSS_COORD_RAMP_INTERVAL_SEC` увеличивает долю зеркалирования по `DWSS_COORD_RAMP_STEPS`.
+4. warmkit на warmup при `shadowCount ≥ ReadyAfter` переходит в состояние «Ready», `/readyz=200`.
 5. Coordinator переводит `activeInstanceId` на warmup, `ratio=0`.
-6. Сессия `completed`.
+6. Сессия завершена (`completed`).
 
 ## Конфигурация
 

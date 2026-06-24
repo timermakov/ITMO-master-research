@@ -5,18 +5,18 @@
 ## FSM
 
 ```
-Starting → Registered → Warming → Ready → Active
-                              ↘ Failed
+«Starting» → «Registered» → «Warming» → «Ready» → «Active»
+                              ↘ «Failed»
 ```
 
-| State | Описание |
+| Состояние | Описание |
 |-------|----------|
-| Starting | Начальное состояние |
-| Registered | Зарегистрирован в ZK |
-| Warming | Получает shadow-трафик (mirror ratio > 0) |
-| Ready | shadowCount ≥ ReadyAfter |
-| Active | Promote coordinator'ом (activeInstanceId) |
-| Failed | Таймаут или ошибка |
+| «Starting» | Начальное состояние |
+| «Registered» | Зарегистрирован в ZK |
+| «Warming» | Получает теневой трафик (доля зеркалирования > 0) |
+| «Ready» | `shadowCount` ≥ `ReadyAfter` |
+| «Active» | Перевод координатором (`activeInstanceId`) |
+| «Failed» | Таймаут или ошибка |
 
 ## Engine
 
@@ -39,7 +39,7 @@ type Engine interface {
 | InstanceID | DWSS_INSTANCE_ID | ID инстанса |
 | ListenAddr | DWSS_HTTP_ADDR | Адрес для registry (host:port) |
 | Role | DWSS_ROLE | `warmup` или `active` |
-| ReadyAfter | DWSS_WARMUP_READY_AFTER | Порог shadow-запросов для Ready |
+| ReadyAfter | DWSS_WARMUP_READY_AFTER | Порог теневых запросов для состояния «Ready» |
 | WarmupTimeout | DWSS_WARMUP_TIMEOUT_SEC | Таймаут прогрева |
 | ShadowMetricsKeep | DWSS_SHADOW_METRICS_KEEP | Размер окна latency |
 
@@ -122,4 +122,4 @@ mux.HandleFunc("GET /readyz", wk.ReadinessHandler())
 cd warmkit && go test ./...
 ```
 
-Покрытие: FSM transitions, shadow metrics P95, engine warmup→ready.
+Покрытие: переходы FSM, shadow metrics P95, engine warmup→«Ready».
