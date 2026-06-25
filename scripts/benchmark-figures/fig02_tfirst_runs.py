@@ -102,9 +102,8 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
         manifest["seed"],
         show_legend=True,
     )
-    ax_all.set_yscale("log")
     ax_all.set_ylabel(r"$T_{\mathrm{first}}$, мкс")
-    ax_all.set_title("Все сценарии (логарифмическая шкала)")
+    ax_all.set_title("Все сценарии")
     ax_all.legend(loc="upper right")
 
     warm_data = filtered_data[1:]
@@ -127,8 +126,8 @@ def plot(out_dir: Path, full_path: Path | None = None) -> None:
         out_dir,
         stem,
         f"Рисунок 2 — Распределение $T_{{\\mathrm{{first}}}}$ (построение hashmap + lookup) "
-        f"по {manifest['runs']} независимым повторам для каждого сценария. Левая панель показывает весь диапазон "
-        f"на логарифмической шкале, правая — увеличенный вид прогретых сценариев. "
+        f"по {manifest['runs']} независимым повторам для каждого сценария. Левая панель — все сценарии "
+        f"на линейной шкале, правая — увеличенный вид прогретых сценариев. "
         f"Ящик, усы и цветные точки построены только по значениям после IQR-фильтрации "
         f"(1,5×IQR), как в сводной статистике; исключённые выбросы на графике не показаны.",
     )
