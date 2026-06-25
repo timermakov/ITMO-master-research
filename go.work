@@ -1,0 +1,11 @@
+go 1.22
+
+use (
+	./LoadedService
+	./benchmark
+	./cmd/mirror-proxy
+	./cmd/warmup-coordinator
+	./internal/envcfg
+	./internal/pprofserver
+	./warmkit
+)

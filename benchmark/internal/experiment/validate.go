@@ -1,0 +1,66 @@
+package experiment
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/itmo-vkr/dwss/warmkit"
+)
+
+var stateClient = &http.Client{Timeout: 10 * time.Second}
+
+// StateSnapshot is workload + warmkit state from GET /state.
+type StateSnapshot struct {
+	Workload struct {
+		IndexCold bool `json:"indexCold"`
+	} `json:"workload"`
+	Warmkit warmkit.MetricsSnapshot `json:"warmkit"`
+}
+
+// FetchState reads LoadedService /state.
+func FetchState(warmupURL string) (StateSnapshot, error) {
+	var snap StateSnapshot
+	resp, err := stateClient.Get(warmupURL + "/state")
+	if err != nil {
+		return snap, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusOK {
+		return snap, fmt.Errorf("state status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return snap, err
+	}
+	return snap, nil
+}
+
+// WaitWarmWorkload polls until the in-memory index is built.
+func WaitWarmWorkload(warmupURL string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		snap, err := FetchState(warmupURL)
+		if err == nil && !snap.Workload.IndexCold {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("workload not warm within %s", timeout)
+}
+
+// ValidPreProbe checks scenario-specific readiness before T_first probe.
+func ValidPreProbe(scenario string, snap StateSnapshot, readyOK bool) bool {
+	switch scenario {
+	case "s0-control":
+		return snap.Workload.IndexCold
+	case "s-ref":
+		return !snap.Workload.IndexCold
+	case "s-dw":
+		return readyOK && !snap.Workload.IndexCold
+	default:
+		return true
+	}
+}

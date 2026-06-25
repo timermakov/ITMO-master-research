@@ -1,0 +1,13 @@
+.git
+.cursor
+bin/
+results/
+tmp/
+**/.git
+**/.cursor
+**/bin/
+**/data/
+LoadedService/data/
+benchmark/
+*.md
+!LoadedService/README.md

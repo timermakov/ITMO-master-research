@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -14,9 +15,6 @@ import (
 )
 
 const pageSizeBytes = 4096
-
-// readSink prevents the compiler from eliminating memory reads in tight loops.
-var readSink uint64
 
 // Store manages a memory-mapped file that can be used to simulate
 // cold vs warm start behavior by touching pages and measuring access latency.
@@ -36,7 +34,7 @@ func New(filePath string, sizeBytes int64) *Store {
 
 // EnsureFile creates the backing file and fills it with a simple pattern so
 // the OS actually allocates pages on first read.
-func (s *Store) EnsureFile() error {
+func (s *Store) EnsureFile() (err error) {
 	if s.sizeBytes <= 0 {
 		return errors.New("sizeBytes must be > 0")
 	}
@@ -48,7 +46,11 @@ func (s *Store) EnsureFile() error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 
 	if err := f.Truncate(s.sizeBytes); err != nil {
 		return err
@@ -81,21 +83,35 @@ func (s *Store) Map() error {
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		if closeErr := f.Close(); closeErr != nil {
+			return closeErr
+		}
 		return err
 	}
 	if info.Size() == 0 {
-		f.Close()
+		if closeErr := f.Close(); closeErr != nil {
+			return closeErr
+		}
 		return fmt.Errorf("backing file is empty: %s", s.filePath)
 	}
 	mm, err := mmap.Map(f, mmap.RDWR, 0)
 	if err != nil {
-		f.Close()
+		if closeErr := f.Close(); closeErr != nil {
+			return closeErr
+		}
 		return err
 	}
 	s.file = f
 	s.data = mm
 	return nil
+}
+
+// Remap unmaps and maps the backing file again (cold page faults on next read).
+func (s *Store) Remap() error {
+	if err := s.Unmap(); err != nil {
+		return err
+	}
+	return s.Map()
 }
 
 // Unmap releases resources.
@@ -170,6 +186,7 @@ func (s *Store) MeasureReadDurationAt(indices []int) time.Duration {
 		return 0
 	}
 	start := time.Now()
+	var sink uint64
 	for _, pageIdx := range indices {
 		if pageIdx < 0 {
 			pageIdx = 0
@@ -178,8 +195,9 @@ func (s *Store) MeasureReadDurationAt(indices []int) time.Duration {
 		if off >= len(data) {
 			continue
 		}
-		readSink += uint64(data[off])
+		sink += uint64(data[off])
 	}
+	runtime.KeepAlive(sink)
 	return time.Since(start)
 }
 
@@ -193,6 +211,7 @@ func (s *Store) MeasureReadLatenciesAt(indices []int) []time.Duration {
 		return nil
 	}
 	latencies := make([]time.Duration, len(indices))
+	var sink uint64
 	for i, pageIdx := range indices {
 		if pageIdx < 0 {
 			pageIdx = 0
@@ -202,9 +221,10 @@ func (s *Store) MeasureReadLatenciesAt(indices []int) []time.Duration {
 			continue
 		}
 		start := time.Now()
-		readSink += uint64(data[off])
+		sink += uint64(data[off])
 		latencies[i] = time.Since(start)
 	}
+	runtime.KeepAlive(sink)
 	return latencies
 }
 
@@ -222,12 +242,14 @@ func (s *Store) MeasureRandomReadLatencies(samples int) []time.Duration {
 		return nil
 	}
 	latencies := make([]time.Duration, samples)
+	var sink uint64
 	for i := 0; i < samples; i++ {
 		off := (r.Intn(pages)) * pageSizeBytes
 		start := time.Now()
-		readSink += uint64(data[off])
+		sink += uint64(data[off])
 		latencies[i] = time.Since(start)
 	}
+	runtime.KeepAlive(sink)
 	return latencies
 }
 

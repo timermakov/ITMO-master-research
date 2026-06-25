@@ -1,0 +1,39 @@
+{
+  "generatedAt": "2026-06-22T18:14:05.481271+00:00",
+  "fullResults": "/Users/pc/Documents/Study/Master/VKR/Projects/results/full/results.json",
+  "h4Results": "/Users/pc/Documents/Study/Master/VKR/Projects/results/h4/results.json",
+  "sources": {
+    "full": {
+      "path": "/Users/pc/Documents/Study/Master/VKR/Projects/results/full/results.json",
+      "sha256": "6673cd38cf12a25665f17315a8b746c39603289fda76a0a4e21d41e150176a98",
+      "protocolVersion": "2",
+      "gitCommit": "2f60c04",
+      "startedAt": "2026-06-22T17:49:06.804536Z",
+      "hypotheses": {
+        "H1": "pass",
+        "H2": "fail",
+        "H2_CI": "fail",
+        "H3": "pass"
+      }
+    },
+    "h4": {
+      "path": "/Users/pc/Documents/Study/Master/VKR/Projects/results/h4/results.json",
+      "sha256": "7e62addbb184df85859ef15cb556ecc4a7e97288d6beccbc607f37446e7ecef8",
+      "protocolVersion": "2",
+      "gitCommit": "71623ee",
+      "startedAt": "2026-06-18T19:36:17.6676196Z",
+      "hypotheses": {
+        "H4": "pass"
+      }
+    }
+  },
+  "figures": [
+    "fig01_tfirst_p50",
+    "fig02_tfirst_runs",
+    "fig03_hypotheses_h1_h2",
+    "fig04_cv_scenarios",
+    "fig05_h4_p95",
+    "fig06_h4_blocks_timeseries",
+    "fig07_load_profile"
+  ]
+}

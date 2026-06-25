@@ -1,0 +1,28 @@
+# Env var names for benchmark manifest (protocol v2).
+# Values only in .env.local.
+
+bench:
+  seed: DWSS_BENCH_SEED
+  samples: DWSS_BENCH_SAMPLES
+  env_profile: DWSS_BENCH_ENV_PROFILE
+  runs: DWSS_BENCH_RUNS
+  max_runs: DWSS_BENCH_MAX_RUNS
+  proxy_url: DWSS_BENCH_PROXY_URL
+  warmup_url: DWSS_BENCH_WARMUP_URL
+  active_url: DWSS_BENCH_ACTIVE_URL
+  coord_url: DWSS_BENCH_COORD_URL
+  rps: DWSS_BENCH_RPS
+  ramp_up_sec: DWSS_BENCH_RAMP_UP_SEC
+  steady_sec: DWSS_BENCH_STEADY_SEC
+  ramp_down_sec: DWSS_BENCH_RAMP_DOWN_SEC
+  h4_steady_sec: DWSS_BENCH_H4_STEADY_SEC
+  h4_runs: DWSS_BENCH_H4_RUNS
+  h4_max_runs: DWSS_BENCH_H4_MAX_RUNS
+  cv_threshold: DWSS_BENCH_CV_THRESHOLD
+  cv_threshold_s0: DWSS_BENCH_CV_THRESHOLD_S0
+  cv_threshold_s_ref: DWSS_BENCH_CV_THRESHOLD_S_REF
+  cv_threshold_s_dw: DWSS_BENCH_CV_THRESHOLD_S_DW
+  cooldown_ms: DWSS_BENCH_COOLDOWN_MS
+  target_instance: DWSS_BENCH_TARGET_INSTANCE
+  active_instance: DWSS_BENCH_ACTIVE_INSTANCE
+  ready_after: DWSS_BENCH_READY_AFTER
