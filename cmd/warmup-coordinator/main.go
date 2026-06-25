@@ -244,7 +244,7 @@ func (c *coordinator) completeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := s.TargetInstanceID
-	active := s.ActiveInstanceID
+	s.ActiveInstanceID = target
 	s.Status = "completed"
 	c.mu.Unlock()
 
@@ -252,13 +252,17 @@ func (c *coordinator) completeSession(w http.ResponseWriter, r *http.Request) {
 		Enabled:          false,
 		Ratio:            0,
 		TargetInstanceID: target,
-		ActiveInstanceID: active,
+		ActiveInstanceID: target,
+		SessionID:        id,
 	}
 	if err := warmkit.WriteMirrorConfig(c.conn, c.service, cfg); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	c.log.Info("session completed, mirror disabled", slog.String("session", id))
+	c.log.Info("session completed, promoted active and mirror disabled",
+		slog.String("session", id),
+		slog.String("activeInstanceId", target),
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s)

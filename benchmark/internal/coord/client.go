@@ -134,7 +134,7 @@ func WaitSessionCompleted(coordURL, sessionID string, timeoutSec int) error {
 	return fmt.Errorf("session %s not completed within %ds (last status: %s)", sessionID, timeoutSec, lastStatus)
 }
 
-// CompleteSession signals the coordinator to disable mirror and mark session completed.
+// CompleteSession signals the coordinator to promote the warmup instance, disable mirror, and mark session completed.
 func CompleteSession(coordURL, sessionID string) error {
 	req, err := http.NewRequest(http.MethodPost, coordURL+"/v1/warmup/sessions/"+sessionID+"/complete", nil)
 	if err != nil {
