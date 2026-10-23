@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -15,17 +14,20 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-zookeeper/zk"
 	"github.com/itmo-vkr/dwss/internal/envcfg"
 	"github.com/itmo-vkr/dwss/internal/pprofserver"
 	"github.com/itmo-vkr/dwss/warmkit"
 )
 
 const (
-	envHTTPAddr    = "DWSS_PROXY_HTTP_ADDR"
-	envZKEndpoints = "DWSS_PROXY_ZK_ENDPOINTS"
-	envServiceName = "DWSS_PROXY_SERVICE_NAME"
-	envShutdownSec = "DWSS_PROXY_SHUTDOWN_SEC"
+	envHTTPAddr           = "DWSS_PROXY_HTTP_ADDR"
+	envCoordination       = "DWSS_COORDINATION"
+	envZKEndpoints        = "DWSS_PROXY_ZK_ENDPOINTS"
+	envServiceName        = "DWSS_PROXY_SERVICE_NAME"
+	envShutdownSec        = "DWSS_PROXY_SHUTDOWN_SEC"
+	envFlagdOFREPURL      = "DWSS_FLAGD_OFREP_URL"
+	envFlagdPollMS        = "DWSS_FLAGD_POLL_MS"
+	envFlagdHTTPTimeoutMS = "DWSS_FLAGD_HTTP_TIMEOUT_MS"
 )
 
 func main() {
@@ -35,7 +37,12 @@ func main() {
 		logger.Error("config", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	endpoints, err := envcfg.RequiredCSV(envZKEndpoints)
+	backendRaw, err := envcfg.Required(envCoordination)
+	if err != nil {
+		logger.Error("config", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	backend, err := warmkit.ParseBackend(backendRaw)
 	if err != nil {
 		logger.Error("config", slog.String("err", err.Error()))
 		os.Exit(1)
@@ -60,16 +67,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	conn, _, err := zk.Connect(endpoints, time.Duration(shutdownSec)*time.Second)
+	views, closer, err := coordinationViews(ctx, logger, backend, service, time.Duration(shutdownSec)*time.Second)
 	if err != nil {
-		logger.Error("zk", slog.String("err", err.Error()))
+		logger.Error("coordination", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	defer conn.Close()
+	if closer != nil {
+		defer func() { _ = closer.Close() }()
+	}
 
-	router := newProxyRouter(logger, conn, service)
-	go router.watchMirror(ctx)
-	go router.watchInstances(ctx)
+	router := newProxyRouter(logger)
+	go router.consume(ctx, views)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", router)
@@ -80,7 +88,7 @@ func main() {
 			logger.Error("listen", slog.String("err", err.Error()))
 		}
 	}()
-	logger.Info("mirror-proxy listening", slog.String("addr", addr))
+	logger.Info("mirror-proxy listening", slog.String("addr", addr), slog.String("backend", string(backend)))
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -94,91 +102,102 @@ func main() {
 	}
 }
 
+func coordinationViews(ctx context.Context, log *slog.Logger, backend warmkit.Backend, service string, timeout time.Duration) (<-chan warmkit.CoordinationView, interface{ Close() error }, error) {
+	switch backend {
+	case warmkit.BackendZooKeeper:
+		endpoints, err := envcfg.RequiredCSV(envZKEndpoints)
+		if err != nil {
+			return nil, nil, err
+		}
+		zkReg, err := warmkit.ConnectZK(endpoints, timeout)
+		if err != nil {
+			return nil, nil, err
+		}
+		ch, err := zkReg.WatchView(ctx, service)
+		if err != nil {
+			_ = zkReg.Close()
+			return nil, nil, err
+		}
+		return ch, zkReg, nil
+	case warmkit.BackendOpenFeature:
+		ofrepURL, err := envcfg.Required(envFlagdOFREPURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		pollMS, err := envcfg.RequiredInt(envFlagdPollMS)
+		if err != nil {
+			return nil, nil, err
+		}
+		httpTimeoutMS, err := envcfg.RequiredInt(envFlagdHTTPTimeoutMS)
+		if err != nil {
+			return nil, nil, err
+		}
+		store := warmkit.NewOFViewStore(warmkit.OFConfig{
+			OFREPURL:     ofrepURL,
+			PollInterval: time.Duration(pollMS) * time.Millisecond,
+			HTTPTimeout:  time.Duration(httpTimeoutMS) * time.Millisecond,
+		}, log)
+		ch, err := store.WatchView(ctx, service)
+		if err != nil {
+			_ = store.Close()
+			return nil, nil, err
+		}
+		return ch, store, nil
+	default:
+		return nil, nil, errUnknownBackend(backend)
+	}
+}
+
+func errUnknownBackend(backend warmkit.Backend) error {
+	return &backendError{backend: backend}
+}
+
+type backendError struct {
+	backend warmkit.Backend
+}
+
+func (e *backendError) Error() string {
+	return "unknown coordination backend " + string(e.backend)
+}
+
 type proxyRouter struct {
-	log     *slog.Logger
-	conn    *zk.Conn
-	service string
-	mu      sync.RWMutex
-	cfg     warmkit.MirrorConfig
-	inst    map[string]string
+	log  *slog.Logger
+	mu   sync.RWMutex
+	cfg  warmkit.MirrorConfig
+	inst map[string]string
 }
 
-func newProxyRouter(log *slog.Logger, conn *zk.Conn, service string) *proxyRouter {
+func newProxyRouter(log *slog.Logger) *proxyRouter {
 	return &proxyRouter{
-		log:     log,
-		conn:    conn,
-		service: service,
-		inst:    make(map[string]string),
+		log:  log,
+		inst: make(map[string]string),
 	}
 }
 
-func (p *proxyRouter) watchMirror(ctx context.Context) {
-	path := "/config/" + p.service + "/mirror"
+func (p *proxyRouter) consume(ctx context.Context, views <-chan warmkit.CoordinationView) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		default:
-		}
-		cfg, err := warmkit.ReadMirrorConfig(p.conn, p.service)
-		if err == nil {
-			p.mu.Lock()
-			p.cfg = cfg
-			p.mu.Unlock()
-		}
-		_, _, events, err := p.conn.GetW(path)
-		if err != nil {
-			time.Sleep(time.Second)
-			continue
-		}
-		select {
-		case <-events:
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (p *proxyRouter) watchInstances(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		children, _, ch, err := p.conn.ChildrenW("/services/" + p.service + "/instances")
-		if err != nil {
-			time.Sleep(time.Second)
-			continue
-		}
-		p.refreshInstances(children)
-		select {
-		case ev := <-ch:
-			if ev.Type == zk.EventNodeChildrenChanged {
-				continue
+		case view, ok := <-views:
+			if !ok {
+				return
 			}
-		case <-ctx.Done():
-			return
+			inst := make(map[string]string, len(view.Instances))
+			for id, rec := range view.Instances {
+				inst[id] = rec.Addr
+			}
+			p.mu.Lock()
+			p.cfg = view.Mirror
+			p.inst = inst
+			p.mu.Unlock()
+			p.log.Info("coordination view",
+				slog.Bool("mirrorEnabled", view.Mirror.Enabled),
+				slog.Float64("ratio", view.Mirror.Ratio),
+				slog.Int("instances", len(inst)),
+			)
 		}
 	}
-}
-
-func (p *proxyRouter) refreshInstances(children []string) {
-	m := make(map[string]string)
-	base := "/services/" + p.service + "/instances/"
-	for _, id := range children {
-		b, _, err := p.conn.Get(base + id)
-		if err != nil {
-			continue
-		}
-		var rec warmkit.InstanceRecord
-		if json.Unmarshal(b, &rec) == nil {
-			m[id] = rec.Addr
-		}
-	}
-	p.mu.Lock()
-	p.inst = m
-	p.mu.Unlock()
 }
 
 func (p *proxyRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {

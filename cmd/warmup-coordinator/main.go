@@ -13,13 +13,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-zookeeper/zk"
 	"github.com/itmo-vkr/dwss/internal/envcfg"
 	"github.com/itmo-vkr/dwss/warmkit"
 )
 
 const (
 	envHTTPAddr     = "DWSS_COORD_HTTP_ADDR"
+	envCoordination = "DWSS_COORDINATION"
 	envZKEndpoints  = "DWSS_COORD_ZK_ENDPOINTS"
 	envServiceName  = "DWSS_COORD_SERVICE_NAME"
 	envRampInterval = "DWSS_COORD_RAMP_INTERVAL_SEC"
@@ -37,14 +37,16 @@ type session struct {
 }
 
 type coordinator struct {
-	log      *slog.Logger
-	conn     *zk.Conn
-	service  string
-	interval time.Duration
-	steps    []float64
-	holdMax  time.Duration
-	mu       sync.Mutex
-	sessions map[string]*session
+	log         *slog.Logger
+	service     string
+	interval    time.Duration
+	steps       []float64
+	holdMax     time.Duration
+	mu          sync.Mutex
+	sessions    map[string]*session
+	writeMirror func(cfg warmkit.MirrorConfig) error
+	lookup      func(instanceID string) (warmkit.InstanceRecord, error)
+	flags       *warmkit.FlagSource
 }
 
 func main() {
@@ -54,7 +56,12 @@ func main() {
 		logger.Error("config", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	endpoints, err := envcfg.RequiredCSV(envZKEndpoints)
+	backendRaw, err := envcfg.Required(envCoordination)
+	if err != nil {
+		logger.Error("config", slog.String("err", err.Error()))
+		os.Exit(1)
+	}
+	backend, err := warmkit.ParseBackend(backendRaw)
 	if err != nil {
 		logger.Error("config", slog.String("err", err.Error()))
 		os.Exit(1)
@@ -91,16 +98,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	conn, _, err := zk.Connect(endpoints, time.Duration(shutdownSec)*time.Second)
-	if err != nil {
-		logger.Error("zk", slog.String("err", err.Error()))
-		os.Exit(1)
-	}
-	defer conn.Close()
-
 	c := &coordinator{
 		log:      logger,
-		conn:     conn,
 		service:  service,
 		interval: time.Duration(intervalSec) * time.Second,
 		steps:    steps,
@@ -108,6 +107,48 @@ func main() {
 		sessions: make(map[string]*session),
 	}
 
+	switch backend {
+	case warmkit.BackendZooKeeper:
+		endpoints, err := envcfg.RequiredCSV(envZKEndpoints)
+		if err != nil {
+			logger.Error("config", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		zkReg, err := warmkit.ConnectZK(endpoints, time.Duration(shutdownSec)*time.Second)
+		if err != nil {
+			logger.Error("zk", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+		defer func() { _ = zkReg.Close() }()
+		c.writeMirror = func(cfg warmkit.MirrorConfig) error {
+			return zkReg.WriteMirror(context.Background(), service, cfg)
+		}
+		c.lookup = func(instanceID string) (warmkit.InstanceRecord, error) {
+			return zkReg.GetInstance(context.Background(), service, instanceID)
+		}
+	case warmkit.BackendOpenFeature:
+		c.flags = warmkit.NewFlagSource(service)
+		c.writeMirror = c.flags.WriteMirror
+		c.lookup = c.flags.GetInstance
+	}
+
+	srv := &http.Server{Addr: addr, Handler: c.routes()}
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("listen", slog.String("err", err.Error()))
+		}
+	}()
+	logger.Info("coordinator listening", slog.String("addr", addr), slog.String("backend", string(backend)))
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	shCtx, shCancel := context.WithTimeout(context.Background(), time.Duration(shutdownSec)*time.Second)
+	defer shCancel()
+	_ = srv.Shutdown(shCtx)
+}
+
+func (c *coordinator) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -118,21 +159,13 @@ func main() {
 	mux.HandleFunc("POST /v1/warmup/sessions/{id}/complete", c.completeSession)
 	mux.HandleFunc("DELETE /v1/warmup/sessions/{id}", c.deleteSession)
 	mux.HandleFunc("PUT /v1/mirror/config", c.setMirrorConfig)
-
-	srv := &http.Server{Addr: addr, Handler: mux}
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("listen", slog.String("err", err.Error()))
-		}
-	}()
-	logger.Info("coordinator listening", slog.String("addr", addr))
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
-	shCtx, shCancel := context.WithTimeout(context.Background(), time.Duration(shutdownSec)*time.Second)
-	defer shCancel()
-	_ = srv.Shutdown(shCtx)
+	mux.HandleFunc("GET "+warmkit.PathOpenFeatureFlags, c.getOpenFeatureFlags)
+	mux.HandleFunc("GET /v1/instances", c.listInstances)
+	mux.HandleFunc("PUT /v1/instances/{id}", c.putInstance)
+	mux.HandleFunc("GET /v1/instances/{id}", c.getInstance)
+	mux.HandleFunc("PUT /v1/instances/{id}/state", c.putInstanceState)
+	mux.HandleFunc("DELETE /v1/instances/{id}", c.deleteInstance)
+	return mux
 }
 
 func parseSteps(raw string) ([]float64, error) {
@@ -178,7 +211,15 @@ func (c *coordinator) createSession(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(s)
 }
 
+func (c *coordinator) applyMirror(cfg warmkit.MirrorConfig) error {
+	if c.writeMirror == nil {
+		return nil
+	}
+	return c.writeMirror(cfg)
+}
+
 func (c *coordinator) runRamp(ctx context.Context, sessionID, target, active string, readyAfter int) {
+	_ = readyAfter
 	cfg := warmkit.MirrorConfig{
 		Enabled:          true,
 		Ratio:            0,
@@ -186,7 +227,9 @@ func (c *coordinator) runRamp(ctx context.Context, sessionID, target, active str
 		ActiveInstanceID: active,
 		SessionID:        sessionID,
 	}
-	_ = warmkit.WriteMirrorConfig(c.conn, c.service, cfg)
+	if err := c.applyMirror(cfg); err != nil {
+		c.log.Error("mirror write", slog.String("err", err.Error()), slog.String("session", sessionID))
+	}
 	holdDeadline := time.Now().Add(c.holdMax)
 
 	for _, ratio := range c.steps {
@@ -196,7 +239,9 @@ func (c *coordinator) runRamp(ctx context.Context, sessionID, target, active str
 		default:
 		}
 		cfg.Ratio = ratio
-		_ = warmkit.WriteMirrorConfig(c.conn, c.service, cfg)
+		if err := c.applyMirror(cfg); err != nil {
+			c.log.Error("mirror write", slog.String("err", err.Error()), slog.String("session", sessionID))
+		}
 		c.log.Info("ramp", slog.Float64("ratio", ratio), slog.String("session", sessionID))
 		time.Sleep(c.interval)
 
@@ -213,12 +258,16 @@ func (c *coordinator) runRamp(ctx context.Context, sessionID, target, active str
 			return
 		default:
 		}
-		_ = warmkit.WriteMirrorConfig(c.conn, c.service, cfg)
+		if err := c.applyMirror(cfg); err != nil {
+			c.log.Error("mirror write", slog.String("err", err.Error()), slog.String("session", sessionID))
+		}
 		c.log.Info("hold mirror", slog.String("session", sessionID))
 		time.Sleep(c.interval)
 	}
 
-	_ = warmkit.WriteMirrorConfig(c.conn, c.service, cfg)
+	if err := c.applyMirror(cfg); err != nil {
+		c.log.Error("mirror write", slog.String("err", err.Error()), slog.String("session", sessionID))
+	}
 
 	c.mu.Lock()
 	if s, ok := c.sessions[sessionID]; ok {
@@ -255,7 +304,7 @@ func (c *coordinator) completeSession(w http.ResponseWriter, r *http.Request) {
 		ActiveInstanceID: target,
 		SessionID:        id,
 	}
-	if err := warmkit.WriteMirrorConfig(c.conn, c.service, cfg); err != nil {
+	if err := c.applyMirror(cfg); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -269,13 +318,11 @@ func (c *coordinator) completeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *coordinator) instanceReady(instanceID string) bool {
-	path := "/services/" + c.service + "/instances/" + instanceID
-	b, _, err := c.conn.Get(path)
-	if err != nil {
+	if c.lookup == nil {
 		return false
 	}
-	var rec warmkit.InstanceRecord
-	if err := json.Unmarshal(b, &rec); err != nil {
+	rec, err := c.lookup(instanceID)
+	if err != nil {
 		return false
 	}
 	return rec.State == warmkit.StateReady || rec.State == warmkit.StateActive
@@ -308,7 +355,7 @@ func (c *coordinator) setMirrorConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := warmkit.WriteMirrorConfig(c.conn, c.service, req); err != nil {
+	if err := c.applyMirror(req); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

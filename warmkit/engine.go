@@ -82,7 +82,10 @@ func (e *engine) Start(ctx context.Context) error {
 		Role:      e.cfg.Role,
 		StartedAt: time.Now().UnixMilli(),
 	}
-	if err := e.reg.RegisterInstance(ctx, e.cfg.ServiceName, e.cfg.InstanceID, rec); err != nil {
+	regCtx, cancel := context.WithTimeout(ctx, e.cfg.WarmupTimeout)
+	err := e.reg.RegisterInstance(regCtx, e.cfg.ServiceName, e.cfg.InstanceID, rec)
+	cancel()
+	if err != nil {
 		return fmt.Errorf("register instance: %w", err)
 	}
 	if err := e.fsm.Transition(StateRegistered); err != nil {

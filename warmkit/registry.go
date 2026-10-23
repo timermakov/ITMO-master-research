@@ -88,6 +88,116 @@ func (z *ZKRegistry) UpdateInstanceState(ctx context.Context, service, instanceI
 	return err
 }
 
+func (z *ZKRegistry) GetInstance(ctx context.Context, service, instanceID string) (InstanceRecord, error) {
+	_ = ctx
+	path := fmt.Sprintf("/services/%s/instances/%s", service, instanceID)
+	b, _, err := z.conn.Get(path)
+	if err != nil {
+		return InstanceRecord{}, err
+	}
+	var rec InstanceRecord
+	if err := json.Unmarshal(b, &rec); err != nil {
+		return InstanceRecord{}, err
+	}
+	return rec, nil
+}
+
+func (z *ZKRegistry) WriteMirror(ctx context.Context, service string, cfg MirrorConfig) error {
+	_ = ctx
+	return WriteMirrorConfig(z.conn, service, cfg)
+}
+
+func (z *ZKRegistry) ReadMirror(ctx context.Context, service string) (MirrorConfig, error) {
+	_ = ctx
+	return ReadMirrorConfig(z.conn, service)
+}
+
+func (z *ZKRegistry) WatchInstances(ctx context.Context, service string) (<-chan map[string]InstanceRecord, error) {
+	ch := make(chan map[string]InstanceRecord, 1)
+	base := fmt.Sprintf("/services/%s/instances", service)
+	go func() {
+		defer close(ch)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			children, _, events, err := z.conn.ChildrenW(base)
+			if err != nil {
+				time.Sleep(time.Second)
+				continue
+			}
+			select {
+			case ch <- z.readInstances(base, children):
+			case <-ctx.Done():
+				return
+			}
+			select {
+			case <-events:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
+
+func (z *ZKRegistry) readInstances(base string, children []string) map[string]InstanceRecord {
+	out := make(map[string]InstanceRecord, len(children))
+	for _, id := range children {
+		b, _, err := z.conn.Get(base + "/" + id)
+		if err != nil {
+			continue
+		}
+		var rec InstanceRecord
+		if json.Unmarshal(b, &rec) == nil {
+			out[id] = rec
+		}
+	}
+	return out
+}
+
+// WatchView combines ZK mirror and instance watches into one snapshot stream.
+func (z *ZKRegistry) WatchView(ctx context.Context, service string) (<-chan CoordinationView, error) {
+	mirrors, err := z.WatchMirror(ctx, service)
+	if err != nil {
+		return nil, err
+	}
+	instances, err := z.WatchInstances(ctx, service)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan CoordinationView, 1)
+	go func() {
+		defer close(ch)
+		var view CoordinationView
+		view.Instances = map[string]InstanceRecord{}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case cfg, ok := <-mirrors:
+				if !ok {
+					return
+				}
+				view.Mirror = cfg
+			case inst, ok := <-instances:
+				if !ok {
+					return
+				}
+				view.Instances = inst
+			}
+			select {
+			case ch <- cloneView(view):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
+
 func (z *ZKRegistry) WatchMirror(ctx context.Context, service string) (<-chan MirrorConfig, error) {
 	ch := make(chan MirrorConfig, 1)
 	path := fmt.Sprintf("/config/%s/mirror", service)

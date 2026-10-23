@@ -16,8 +16,8 @@
 
 | Контур              | Назначение                                                          |
 | ------------------- | ------------------------------------------------------------------- |
-| **DWSS**            | warmkit, mirror-proxy, warmup-coordinator, LoadedService, ZooKeeper |
-| **benchmark** | Эксперименты S0/S_ref/S_dw/H4, статистика, отчёты (не пишет в ZK)   
+| **DWSS**            | warmkit, mirror-proxy, warmup-coordinator, LoadedService, ZooKeeper или OpenFeature/flagd |
+| **benchmark** | Эксперименты S0/S_ref/S_dw/H4, статистика, отчёты (не пишет в store)   
 
 ```plantuml
 @startuml
@@ -34,16 +34,16 @@ rectangle "СДПС" {
   rectangle "Active LoadedService" as Active
   rectangle "Warmup LoadedService\n+ warmkit" as Warmup
 }
-database "ZooKeeper" as ZK
+database "Coordination\nZK or flagd" as Store
 
 Client --> Proxy
 Bench --> Proxy
 Bench ..> Coord : POST /v1/warmup/sessions
 Proxy --> Active
 Proxy ..> Warmup : mirror GET
-Warmup --> ZK
-Coord --> ZK : config/mirror
-Proxy --> ZK
+Warmup --> Store
+Coord --> Store : mirror flags / znodes
+Proxy --> Store
 @enduml
 ```
 
@@ -51,12 +51,15 @@ Proxy --> ZK
 
 `Starting → Registered → Warming → Ready → Active | Failed`
 
-## ZooKeeper
+## Координация
 
-| ZNode | Writer | Readers |
-|-------|--------|---------|
-| `/services/{app}/instances/{id}` | warmkit | coordinator, proxy |
-| `/config/{app}/mirror` | warmup-coordinator | mirror-proxy, warmkit |
+`DWSS_COORDINATION=openfeature` (по умолчанию в `.env.example`) или `zookeeper`.
+
+| Смысл | ZooKeeper | OpenFeature + flagd |
+|-------|-----------|---------------------|
+| Инстансы | `/services/{app}/instances/{id}` (ephemeral, writer: warmkit) | флаг `dwss.{app}.instances` (writer: coordinator HTTP) |
+| Mirror | `/config/{app}/mirror` (writer: coordinator) | флаг `dwss.{app}.mirror` |
+| Чтение | ZK watch | OFREP на flagd (`POST /ofrep/v1/evaluate/flags/{key}`) |
 
 ## Быстрый старт
 
