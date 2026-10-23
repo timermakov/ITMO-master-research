@@ -20,7 +20,7 @@ HTTP-сервис, имитирующий нагруженный микросе�
 | Env | Значение |
 |-----|----------|
 | `DWSS_ROLE` | `active` или `warmup` |
-| `DWSS_INSTANCE_ID` | ID для ZK registry |
+| `DWSS_INSTANCE_ID` | ID для registry (ZK или OpenFeature) |
 | `DWSS_HTTP_ADDR` | listen address (host:port) |
 
 ## Конфигурация

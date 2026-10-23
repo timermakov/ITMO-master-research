@@ -35,14 +35,13 @@ func main() {
 	}
 
 	var wk warmkit.Engine
-	var zkReg *warmkit.ZKRegistry
+	var activeReg warmkit.Registry
 	if cfg.Role == "warmup" {
-		reg, err := warmkit.ConnectZK(cfg.ZKEndpoints, cfg.WarmupTimeout)
+		reg, err := newRegistry(ctx, cfg, logger)
 		if err != nil {
-			logger.Error("zk connect", slog.String("err", err.Error()))
+			logger.Error("registry", slog.String("err", err.Error()))
 			os.Exit(1)
 		}
-		zkReg = reg
 		wk = warmkit.NewEngine(cfg.WarmkitConfig(), reg, logger)
 		if err := wk.Start(ctx); err != nil {
 			logger.Error("warmkit start", slog.String("err", err.Error()))
@@ -55,15 +54,15 @@ func main() {
 		}()
 	}
 	if cfg.Role == "active" {
-		reg, err := warmkit.RegisterActive(ctx, cfg.ZKEndpoints, cfg.WarmupTimeout, cfg.ServiceName, cfg.InstanceID, cfg.HTTPAddr)
+		reg, err := registerActive(ctx, cfg, logger)
 		if err != nil {
-			logger.Error("zk register active", slog.String("err", err.Error()))
+			logger.Error("register active", slog.String("err", err.Error()))
 			os.Exit(1)
 		}
-		zkReg = reg
+		activeReg = reg
 	}
-	if zkReg != nil {
-		defer func() { _ = zkReg.Close() }()
+	if activeReg != nil {
+		defer func() { _ = activeReg.Close() }()
 	}
 
 	srv := httpserver.New(cfg.HTTPAddr, cfg.Role, logger, work, wk)
@@ -71,7 +70,11 @@ func main() {
 		logger.Error("start server", slog.String("err", err.Error()))
 		os.Exit(1)
 	}
-	logger.Info("service ready", slog.String("addr", cfg.HTTPAddr), slog.String("role", cfg.Role))
+	logger.Info("service ready",
+		slog.String("addr", cfg.HTTPAddr),
+		slog.String("role", cfg.Role),
+		slog.String("backend", string(cfg.Coordination)),
+	)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
@@ -82,5 +85,25 @@ func main() {
 	_ = srv.Stop(shCtx)
 	if pprofSrv != nil {
 		_ = pprofSrv.Stop(shCtx)
+	}
+}
+
+func newRegistry(_ context.Context, cfg config.Settings, logger *slog.Logger) (warmkit.Registry, error) {
+	switch cfg.Coordination {
+	case warmkit.BackendOpenFeature:
+		return warmkit.NewOFRegistry(cfg.OFConfig(), logger), nil
+	default:
+		return warmkit.ConnectZK(cfg.ZKEndpoints, cfg.WarmupTimeout)
+	}
+}
+
+func registerActive(ctx context.Context, cfg config.Settings, logger *slog.Logger) (warmkit.Registry, error) {
+	switch cfg.Coordination {
+	case warmkit.BackendOpenFeature:
+		regCtx, cancel := context.WithTimeout(ctx, cfg.WarmupTimeout)
+		defer cancel()
+		return warmkit.RegisterActiveOF(regCtx, cfg.OFConfig(), logger, cfg.ServiceName, cfg.InstanceID, cfg.HTTPAddr)
+	default:
+		return warmkit.RegisterActive(ctx, cfg.ZKEndpoints, cfg.WarmupTimeout, cfg.ServiceName, cfg.InstanceID, cfg.HTTPAddr)
 	}
 }

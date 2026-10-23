@@ -12,7 +12,7 @@
 | Состояние | Описание |
 |-------|----------|
 | «Starting» | Начальное состояние |
-| «Registered» | Зарегистрирован в ZK |
+| «Registered» | Зарегистрирован в store координации |
 | «Warming» | Получает теневой трафик (доля зеркалирования > 0) |
 | «Ready» | `shadowCount` ≥ `ReadyAfter` |
 | «Active» | Перевод координатором (`activeInstanceId`) |
@@ -35,7 +35,7 @@ type Engine interface {
 
 | Поле | Env (LoadedService) | Описание |
 |------|---------------------|----------|
-| ServiceName | DWSS_SERVICE_NAME | Имя приложения в ZK |
+| ServiceName | DWSS_SERVICE_NAME | Имя приложения в store координации |
 | InstanceID | DWSS_INSTANCE_ID | ID инстанса |
 | ListenAddr | DWSS_HTTP_ADDR | Адрес для registry (host:port) |
 | Role | DWSS_ROLE | `warmup` или `active` |
@@ -60,14 +60,18 @@ type Registry interface {
 }
 ```
 
-- `ConnectZK(endpoints, timeout)` — production registry
+- `ConnectZK(endpoints, timeout)` — ZooKeeper registry
+- `NewOFRegistry(cfg)` — OpenFeature registry: запись в coordinator HTTP, чтение через flagd OFREP
 - `NewMemoryRegistry()` — in-memory для тестов
 
-## Mirror config (ZK)
+Backend стенда: `DWSS_COORDINATION=zookeeper|openfeature`.
 
-Путь: `/config/{app}/mirror`
+## Mirror config
 
-Writer: **только warmup-coordinator** (`WriteMirrorConfig`).
+Writer: **только warmup-coordinator**.
+
+- ZooKeeper: `/config/{app}/mirror`
+- OpenFeature: флаг `dwss.{app}.mirror` (документ `GET /v1/openfeature/flags`)
 
 ```go
 type MirrorConfig struct {
@@ -108,7 +112,7 @@ type MetricsSnapshot struct {
 
 ```go
 if cfg.Role == "warmup" {
-    reg, _ := warmkit.ConnectZK(cfg.ZKEndpoints, cfg.WarmupTimeout)
+    reg, _ := warmkit.ConnectZK(...) // или NewOFRegistry при DWSS_COORDINATION=openfeature
     wk = warmkit.NewEngine(cfg.WarmkitConfig(), reg, logger)
     wk.Start(ctx)
 }

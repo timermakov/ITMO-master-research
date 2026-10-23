@@ -3,11 +3,12 @@ module github.com/itmo-vkr/dwss/cmd/mirror-proxy
 go 1.22
 
 require (
-	github.com/go-zookeeper/zk v1.0.4
 	github.com/itmo-vkr/dwss/internal/envcfg v0.0.0
 	github.com/itmo-vkr/dwss/internal/pprofserver v0.0.0
 	github.com/itmo-vkr/dwss/warmkit v0.0.0
 )
+
+require github.com/go-zookeeper/zk v1.0.4 // indirect
 
 replace (
 	github.com/itmo-vkr/dwss/internal/envcfg => ../../internal/envcfg
